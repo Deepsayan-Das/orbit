@@ -1,0 +1,5 @@
+ollama
+python-dotenv
+openai
+huggingface_hub
+google-genai
