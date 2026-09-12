@@ -1,34 +1,49 @@
 import os
 from typing import Any, Dict, Iterator, List, Optional, Union
 from dotenv import load_dotenv
-from huggingface_hub import HfApi, InferenceClient
 
 from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk
 
 load_dotenv()
 
+# Try importing the official groq SDK first, fall back to OpenAI SDK with Groq base URL
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 
-class HuggingFaceProvider(BaseLLMProvider):
-    """Hugging Face Inference API Provider implementation."""
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
-    def __init__(self, model: str = "Qwen/Qwen2.5-Coder-7B-Instruct", token: Optional[str] = None, hf_provider: Optional[str] = None):
+
+class GroqProvider(BaseLLMProvider):
+    """Groq API Provider supporting ultra-fast LLM inference and streaming."""
+
+    def __init__(self, model: str = "llama-3.3-70b-versatile", api_key: Optional[str] = None):
         self.model = model
-        self.token = token or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_API_KEY")
-        self.hf_provider = hf_provider or os.getenv("HF_PROVIDER")
-        self._client: Optional[InferenceClient] = None
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        self._client: Optional[Any] = None
 
     @property
-    def client(self) -> InferenceClient:
+    def client(self) -> Any:
         if self._client is None:
-            if not self.token:
-                raise ValueError("HF_TOKEN or HUGGINGFACE_API_KEY environment variable is required.")
-            client_kwargs: Dict[str, Any] = {"token": self.token}
-            if self.model:
-                clean_model = self.model.split(":")[0]
-                client_kwargs["model"] = clean_model
-            if self.hf_provider:
-                client_kwargs["provider"] = self.hf_provider
-            self._client = InferenceClient(**client_kwargs)
+            if not self.api_key:
+                raise ValueError("GROQ_API_KEY environment variable or api_key parameter is required.")
+            
+            if Groq is not None:
+                self._client = Groq(api_key=self.api_key)
+            elif OpenAI is not None:
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    base_url="https://api.groq.com/openai/v1"
+                )
+            else:
+                raise ImportError(
+                    "Neither 'groq' nor 'openai' package is installed. "
+                    "Please install either 'groq' or 'openai' via pip."
+                )
         return self._client
 
     def chat(
@@ -45,7 +60,8 @@ class HuggingFaceProvider(BaseLLMProvider):
             return self._sync_chat(formatted_messages, **kwargs)
 
     def _sync_chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> LLMResponse:
-        response = self.client.chat_completion(
+        response = self.client.chat.completions.create(
+            model=self.model,
             messages=messages,
             stream=False,
             **kwargs
@@ -53,17 +69,23 @@ class HuggingFaceProvider(BaseLLMProvider):
         choice = response.choices[0]
         content = choice.message.content or ""
 
+        usage = {}
+        if hasattr(response, "usage") and response.usage:
+            usage = response.usage.model_dump() if hasattr(response.usage, "model_dump") else dict(response.usage)
+
         return LLMResponse(
             content=content,
             model=self.model,
             metadata={
                 "finish_reason": getattr(choice, "finish_reason", None),
+                "usage": usage,
             },
             raw_response=response,
         )
 
     def _stream_chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> Iterator[StreamChunk]:
-        stream_response = self.client.chat_completion(
+        stream_response = self.client.chat.completions.create(
+            model=self.model,
             messages=messages,
             stream=True,
             **kwargs
@@ -81,12 +103,14 @@ class HuggingFaceProvider(BaseLLMProvider):
                 )
 
     def is_available(self) -> bool:
-        if not self.token:
+        """
+        Check if the Groq API key is set and valid.
+        Executes models.list() to verify authentication without consuming tokens.
+        """
+        if not self.api_key:
             return False
         try:
-            api = HfApi(token=self.token)
-            base_model_id = self.model.split(":")[0]  # strip :cheapest/:preferred routing suffix
-            api.model_info(base_model_id)
+            self.client.models.list()
             return True
         except Exception:
             return False

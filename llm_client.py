@@ -4,6 +4,7 @@ from providers import (
     BaseLLMProvider,
     ChatMessage,
     GeminiProvider,
+    GroqProvider,
     HuggingFaceProvider,
     LLMResponse,
     OllamaProvider,
@@ -24,6 +25,7 @@ class OrbitLLM:
         "openai": OpenAIProvider,
         "huggingface": HuggingFaceProvider,
         "gemini": GeminiProvider,
+        "groq": GroqProvider,
     }
 
     def __init__(
