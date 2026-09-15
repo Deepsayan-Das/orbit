@@ -72,7 +72,7 @@ def write_file(path: str, content: str) -> str:
 def register_filesystem_tools():
     """Register all filesystem tools into the global tool registry."""
     register_tool("list_directory", list_directory, LIST_DIRECTORY_SCHEMA, risk_level=ToolRiskLevel.SAFE)
-    register_tool("write_file", write_file, WRITE_FILE_SCHEMA, risk_level=ToolRiskLevel.SENSITIVE)
+    register_tool("write_file", write_file, WRITE_FILE_SCHEMA, risk_level=ToolRiskLevel.DANGEROUS)
 
 
 # Disabled auto-registration for safety

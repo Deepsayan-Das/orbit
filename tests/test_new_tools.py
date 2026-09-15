@@ -74,7 +74,7 @@ class TestNewTools(unittest.TestCase):
 
         diff_res = git_diff()
         self.assertIsInstance(diff_res, str)
-        self.assertNotIn("Error executing", diff_res)
+        self.assertFalse(diff_res.startswith("Error executing git diff:"))
 
     def test_audit_log_created(self):
         res = execute_tool_unsafe_for_testing_only("read_file", {"path": "README.md"})

@@ -12,13 +12,13 @@ from .registry import ToolRiskLevel, register_tool
 
 RUN_SHELL_COMMAND_SCHEMA: Dict[str, Any] = {
     "name": "run_shell_command",
-    "description": "Execute a shell command on the host system. Requires permission for non-read-only commands.",
+    "description": "Execute a shell command on the host system. For Git tasks (commit, push, diff, status), use dedicated git_commit, git_push, git_status, git_diff tools instead.",
     "parameters": {
         "type": "object",
         "properties": {
             "command": {
                 "type": "string",
-                "description": "The shell command string to execute (e.g. 'git status', 'python --version', 'dir')."
+                "description": "The shell command string to execute (e.g. 'python --version', 'dir')."
             }
         },
         "required": ["command"]

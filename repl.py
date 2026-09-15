@@ -113,19 +113,23 @@ def repl(agent: OrbitLLM, collection):
             grounded_prompt = build_context_prompt(user_input, top_chunks)
 
             # Send: clean history + this turn's grounded prompt
-            outgoing = history + [ChatMessage(role="user", content=grounded_prompt)]
+            current_turn_messages = history + [ChatMessage(role="user", content=grounded_prompt)]
+            MAX_TOOL_TURNS = 5
+            tool_turn = 0
 
-            # Step 1: Decision call with tools attached (non-streamed)
-            check_resp = agent.chat(
-                messages=outgoing,
-                system_prompt=SYSTEM_PROMPT,
-                stream=False,
-                tools=registered_tools
-            )
+            while tool_turn < MAX_TOOL_TURNS:
+                # Decision call with tools attached (non-streamed)
+                check_resp = agent.chat(
+                    messages=current_turn_messages,
+                    system_prompt=SYSTEM_PROMPT,
+                    stream=False,
+                    tools=registered_tools
+                )
 
-            tool_calls = extract_tool_calls(check_resp.raw_response)
+                tool_calls = extract_tool_calls(check_resp.raw_response)
+                if not tool_calls:
+                    break
 
-            if tool_calls:
                 tool_executed = False
                 for call in tool_calls:
                     fn_name, fn_args = parse_tool_call(call)
@@ -133,29 +137,20 @@ def repl(agent: OrbitLLM, collection):
                         tool_result = tools.execute_tool(fn_name, fn_args)
                         print(f"\n[tool executed] {fn_name}({fn_args}) -> {str(tool_result)[:100]}...")
 
-                        followup_messages = history + [
-                            ChatMessage(role="user", content=grounded_prompt),
-                            ChatMessage(role="assistant", content="", tool_calls=tool_calls),
-                            ChatMessage(role="tool", content=str(tool_result), name=fn_name)
-                        ]
-
-                        full_response = stream_reply(agent, followup_messages, SYSTEM_PROMPT)
-                        history.append(ChatMessage(role="user", content=user_input))
-                        history.append(ChatMessage(role="assistant", content=full_response))
+                        current_turn_messages.append(ChatMessage(role="assistant", content="", tool_calls=tool_calls))
+                        current_turn_messages.append(ChatMessage(role="tool", content=f"[Tool Result for {fn_name}]:\n{str(tool_result)}", name=fn_name))
                         tool_executed = True
                         break
 
-
                 if not tool_executed:
-                    full_response = stream_reply(agent, outgoing, SYSTEM_PROMPT)
-                    history.append(ChatMessage(role="user", content=user_input))
-                    history.append(ChatMessage(role="assistant", content=full_response))
+                    break
 
-            else:
-                # Step 2: No tool call requested — stream typing-effect output without tools attached
-                full_response = stream_reply(agent, outgoing, SYSTEM_PROMPT)
-                history.append(ChatMessage(role="user", content=user_input))
-                history.append(ChatMessage(role="assistant", content=full_response))
+                tool_turn += 1
+
+            # Final step: Stream response to stdout without tools attached
+            full_response = stream_reply(agent, current_turn_messages, SYSTEM_PROMPT)
+            history.append(ChatMessage(role="user", content=user_input))
+            history.append(ChatMessage(role="assistant", content=full_response))
 
         except KeyboardInterrupt:
             print("\n[interrupted, exiting]")

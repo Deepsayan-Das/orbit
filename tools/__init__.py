@@ -17,7 +17,9 @@ from .registry import (
 from .filesystem import list_directory, register_filesystem_tools, write_file
 from .read_file import read_file
 from .shell import is_safe_command, run_shell_command
-from .git_tools import git_diff, git_status
+from .git_tools import git_blame, git_commit, git_diff, git_log, git_push, git_status
+from .container_tools import container_logs, container_ps
+from .dev_tools import run_tests, search_logs
 from .code_search import search_codebase
 
 __all__ = [
@@ -38,5 +40,13 @@ __all__ = [
     "is_safe_command",
     "git_status",
     "git_diff",
+    "git_log",
+    "git_blame",
+    "git_commit",
+    "git_push",
+    "container_ps",
+    "container_logs",
+    "run_tests",
+    "search_logs",
     "search_codebase",
 ]
