@@ -10,10 +10,13 @@ from chunker import (
     chunk_fallback,
     chunk_prose,
     chunk_with_treesitter,
+    extract_symbols,
 )
+from orbit_repl import correct_query_terms
 
 
 class TestOrbitChunker(unittest.TestCase):
+
 
     def test_python_chunking(self):
         py_code = '''
@@ -140,6 +143,38 @@ Orbit is a developer-first AI assistant built for galactOS.
         self.assertIn("Heading: # Architecture Overview", summary)
         self.assertIn("Orbit is a developer-first AI assistant", summary)
 
+    def test_extract_symbols(self):
+        py_code = '''
+def calculate_total(prices):
+    pass
+
+class InvoiceManager:
+    def create_invoice(self):
+        pass
+'''
+        symbols = extract_symbols("invoice.py", py_code)
+        self.assertIn("calculate_total", symbols)
+        self.assertIn("InvoiceManager", symbols)
+
+    def test_correct_query_terms(self):
+        known_symbols = ["calculate_total", "InvoiceManager", "chunk_python_file", "build_module_summary"]
+
+        query1 = "how does calculte_total work?"
+        corrected1 = correct_query_terms(query1, known_symbols)
+        self.assertEqual(corrected1, "how does calculate_total work?")
+
+        query2 = "explain chukn_python_file and build_module_summary"
+        corrected2 = correct_query_terms(query2, known_symbols)
+        self.assertEqual(corrected2, "explain chunk_python_file and build_module_summary")
+
+    def test_correct_query_terms_does_not_mangle_english(self):
+        known_symbols = ["chat", "list_directory", "ChatMessage", "stream_chat", "calculate_total"]
+        query = "what files are in the current directory?"
+        corrected = correct_query_terms(query, known_symbols)
+        self.assertEqual(corrected, "what files are in the current directory?")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

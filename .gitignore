@@ -55,3 +55,6 @@ htmlcov/
 
 # Log Files
 *.log
+
+# Orbit ChromaDB Persistent Data
+.orbit/

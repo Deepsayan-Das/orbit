@@ -6,11 +6,19 @@ from dataclasses import dataclass, field
 @dataclass
 class ChatMessage:
     """Represents a single message in a multi-turn conversation."""
-    role: str  # "system", "user", or "assistant"
+    role: str  # "system", "user", "assistant", or "tool"
     content: str
+    name: Optional[str] = None
+    tool_calls: Optional[Any] = None
 
-    def to_dict(self) -> Dict[str, str]:
-        return {"role": self.role, "content": self.content}
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {"role": self.role, "content": self.content or ""}
+        if self.name is not None:
+            d["name"] = self.name
+        if self.tool_calls is not None:
+            d["tool_calls"] = self.tool_calls
+        return d
+
 
 
 @dataclass
@@ -48,15 +56,26 @@ def normalize_messages(
     elif isinstance(messages, ChatMessage):
         result.append(messages)
     elif isinstance(messages, dict):
-        result.append(ChatMessage(role=messages.get("role", "user"), content=messages.get("content", "")))
+        result.append(ChatMessage(
+            role=messages.get("role", "user"),
+            content=messages.get("content", ""),
+            name=messages.get("name"),
+            tool_calls=messages.get("tool_calls")
+        ))
     elif isinstance(messages, list):
         for msg in messages:
             if isinstance(msg, ChatMessage):
                 result.append(msg)
             elif isinstance(msg, dict):
-                result.append(ChatMessage(role=msg.get("role", "user"), content=msg.get("content", "")))
+                result.append(ChatMessage(
+                    role=msg.get("role", "user"),
+                    content=msg.get("content", ""),
+                    name=msg.get("name"),
+                    tool_calls=msg.get("tool_calls")
+                ))
             elif isinstance(msg, str):
                 result.append(ChatMessage(role="user", content=msg))
+
     
     return result
 
