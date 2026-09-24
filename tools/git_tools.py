@@ -111,6 +111,8 @@ def git_status() -> str:
             ["git", "status"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15
         )
         if proc.returncode != 0:
@@ -128,6 +130,8 @@ def git_diff(staged: bool = False) -> str:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15
         )
         if proc.returncode != 0:
@@ -148,6 +152,8 @@ def git_log(n: int = 10) -> str:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15
         )
         if proc.returncode != 0:
@@ -172,6 +178,8 @@ def git_blame(file: str, line: int = 0) -> str:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15
         )
         if proc.returncode != 0:
@@ -197,6 +205,8 @@ def git_commit(message: str, stage_all: bool = True) -> str:
                 ["git", "add", "."],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=15
             )
             if add_proc.returncode != 0:
@@ -206,6 +216,8 @@ def git_commit(message: str, stage_all: bool = True) -> str:
             ["git", "commit", "-m", message.strip()],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15
         )
         if commit_proc.returncode != 0:
@@ -227,6 +239,8 @@ def git_push(remote: str = "origin", branch: str = "") -> str:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30
         )
         if proc.returncode != 0:

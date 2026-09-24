@@ -14,12 +14,14 @@ Configure environment variables in a `.env` file at the root of your project:
 | `"openai"` | `OpenAIProvider` | `gpt-4o-mini` | `OPENAI_API_KEY` | OpenAI Cloud API models. |
 | `"huggingface"` | `HuggingFaceProvider` | `Qwen/Qwen2.5-7B-Instruct` | `HF_TOKEN` (or `HUGGINGFACE_API_KEY`) | Free-tier accessible Serverless Inference API models on HuggingFace Hub. |
 | `"gemini"` | `GeminiProvider` | `gemini-2.5-flash` | `GEMINI_API_KEY` | Google Gemini models via official `google-genai` SDK. |
+| `"groq"` | `GroqProvider` | `llama-3.3-70b-versatile` | `GROQ_API_KEY` | Ultra-fast Groq LPU inference via official SDK or OpenAI compatible client. |
 
 ### Example `.env` File
 ```env
 OPENAI_API_KEY=sk-proj-...
 HF_TOKEN=hf_...
 GEMINI_API_KEY=AIzaSy...
+GROQ_API_KEY=gsk_...
 ```
 
 ---
@@ -42,6 +44,9 @@ llm_gemini = OrbitLLM(provider="gemini", model="gemini-2.5-flash")
 
 # 4. Use OpenAI API
 llm_openai = OrbitLLM(provider="openai", model="gpt-4o-mini")
+
+# 5. Use Groq API
+llm_groq = OrbitLLM(provider="groq", model="llama-3.3-70b-versatile")
 
 # Generate completion with streaming (token-by-token)
 stream = llm_gemini.generate(prompt="Explain galactOS architecture", stream=True)

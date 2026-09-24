@@ -2,37 +2,49 @@
 
 Orbit is the AI assistant layer for **GalactOS** — a provider-agnostic LLM
 runtime plus a raw, from-scratch RAG (retrieval-augmented generation)
-pipeline that lets Orbit answer questions grounded in a real codebase,
-rather than guessing from a single prompt or the model's training data
-alone.
+pipeline and tool registry system that lets Orbit answer questions grounded
+in a real codebase and perform tool-assisted actions safely.
 
-No LangChain, no LlamaIndex — every piece (chunking, embedding, retrieval,
-injection) is hand-built, so the mechanics are fully understood rather than
-hidden behind a framework. See `docs/` (or the project's learning notes)
-for the reasoning behind each design decision.
+No heavy AI orchestration frameworks — every component (AST chunking, ChromaDB
+vector indexing, retrieval, symbol typo correction, tool dispatching) is built directly so the mechanics are fully understood and maintainable. See [docs/ARCHITECTURE.md](file:///d:/web%20development%20projects/ongoing/orbit/docs/ARCHITECTURE.md)
+for the complete design breakdown.
 
 ## What's in here
 
-```
-providers/
-  base.py          # BaseLLMProvider (ABC), ChatMessage, LLMResponse, StreamChunk
-  ollama_provider.py
-  openai_provider.py
-  huggingface_provider.py
-  gemini_provider.py
-  groq_provider.py
-llm_client.py      # OrbitLLM — provider-agnostic facade/factory
-chunker.py         # Multi-language chunking dispatcher (AST, tree-sitter, prose)
-orbit_repl.py       # Indexing pipeline + interactive REPL with RAG
-tests/
+```text
+providers/             # LLM Provider abstraction layer
+  base.py              # BaseLLMProvider (ABC), ChatMessage, LLMResponse, StreamChunk
+  ollama_provider.py   # Ollama local model integration & embeddings
+  openai_provider.py   # OpenAI Cloud API
+  huggingface_provider.py # HuggingFace Inference API
+  gemini_provider.py   # Google Gemini API
+  groq_provider.py     # Groq LPU API
+llm_client.py          # OrbitLLM — provider-agnostic facade/factory
+rag/                   # Retrieval-Augmented Generation subsystem
+  chunker.py           # AST & Tree-sitter chunker + module summarizer
+  indexer.py           # Persistent ChromaDB vector store & SHA-256 incremental hashing
+  retrieval.py         # Vector similarity search & difflib AST symbol typo correction
+tools/                 # Builtin Tool Registry & risk-level authorization system
+  registry.py          # Tool schema generator, audit logger, and execution router
+  filesystem.py        # list_directory (SAFE), write_file (DANGEROUS)
+  read_file.py         # read_file (SAFE)
+  shell.py             # run_shell_command (DANGEROUS)
+  git_tools.py         # git_status, git_diff, git_log, git_blame (SAFE), git_commit, git_push (DANGEROUS)
+  container_tools.py   # container_ps, container_logs (SAFE)
+  dev_tools.py         # run_tests (SENSITIVE), search_logs (SAFE)
+  code_search.py       # search_codebase (SAFE)
+repl.py                # Interactive RAG REPL with tool execution and streaming
+orbit_repl.py          # Legacy entrypoint stub delegating to repl.py
+chunker.py             # Legacy import stub delegating to rag.chunker
+tests/                 # Automated unit test suite
 ```
 
 ## Architecture
 
 ### 1. Provider abstraction (`providers/`, `llm_client.py`)
 
-Every LLM backend (Ollama, OpenAI, HuggingFace, Gemini, Groq, and any future
-provider) implements a single interface:
+Every LLM backend (Ollama, OpenAI, HuggingFace, Gemini, Groq, and custom
+registered providers) implements a unified interface:
 
 ```python
 class BaseLLMProvider(ABC):
@@ -44,7 +56,7 @@ class BaseLLMProvider(ABC):
     def is_available(self) -> bool: ...
 ```
 
-`OrbitLLM` is the facade application code actually talks to:
+`OrbitLLM` is the facade application code talks to:
 
 ```python
 from llm_client import OrbitLLM
@@ -54,10 +66,10 @@ response = llm.chat(messages="Hello, Orbit")
 print(response.content)
 ```
 
-Switching providers is a one-line change — no call-site changes needed:
+Switching providers is a simple one-line change — no call-site modifications needed:
 
 ```python
-llm = OrbitLLM(provider="openai", model="gpt-4o-mini")
+llm = OrbitLLM(provider="groq", model="llama-3.3-70b-versatile")
 ```
 
 Custom providers can be registered at runtime:
@@ -70,72 +82,58 @@ Input is normalized centrally (`normalize_messages`) so callers can pass a
 bare string, a dict, a `ChatMessage`, or a list of any of those — every
 provider always receives a clean `List[ChatMessage]`.
 
-### 2. Chunking (`chunker.py`)
+### 2. AST-Aware Chunking (`rag/chunker.py`)
 
-Chunking strategy is dispatched by file type, because a single universal
-splitter produces meaningless boundaries (proven the hard way — naive
-character-count and blank-line splitting both cut through the middle of
-functions and statements):
+Chunking strategy is dispatched by file type, avoiding destructive mid-statement cuts:
 
 | File type | Strategy |
 |---|---|
 | `.py` | Python `ast` — one chunk per top-level function/class |
-| `.go`, `.js`, `.ts`, `.rs`, `.java`, `.c`, `.cpp`, ... | `tree-sitter` — same principle, language-aware grammar |
+| `.go`, `.js`, `.ts`, `.rs`, `.java`, `.c`, `.cpp` | `tree-sitter` — language-aware grammar rules |
 | `.md`, `.txt`, `.rst` | Heading-based (falls back to paragraph breaks) |
-| anything else | Character-count sliding window (last resort, logged) |
+| anything else | Character-count sliding window (logged fallback) |
 
-Oversized classes/structs are split per-member, with the parent's name and
-docstring prepended, so a retrieved method chunk is still self-contained
-and knows what it belongs to.
+Oversized classes/structs are split per-member with parent header context prepended. Each file also receives a deterministic, LLM-free **module-level summary** record (docstrings/comments + structural symbol listing) so whole-file queries retrieve effectively.
 
-Each indexed file also gets one **module-level summary** record (deterministic,
-no LLM call — built from docstrings/comments + a structural listing of
-top-level symbols). This exists specifically so "what does this file do"
-style questions have something to retrieve — fine-grained chunks alone
-can't answer whole-file questions, since that answer isn't localized to
-any single chunk.
+### 3. Persistent Retrieval & Tool Registry (`rag/`, `tools/`, `repl.py`)
 
-### 3. Retrieval + generation (`orbit_repl.py`)
-
-```
+```text
 index_directory(path)
     → chunk_file() per file (dispatched by extension)
+    → compute SHA-256 content_hash (skip unchanged files)
     → embed() each chunk (Ollama nomic-embed-text)
-    → in-memory records: {source, text, embedding, level}
+    → store in persistent ChromaDB collection (./.orbit/chroma_data)
 
-retrieve(query, records, top_k=3)
-    → embed the query
-    → cosine similarity against every stored record
-    → top-k highest-scoring chunks
+retrieve(query, collection, top_k=3)
+    → embed query & vector search ChromaDB collection
+    → if top retrieval score < 0.45: apply difflib typo correction on AST symbols
 
-ask_with_context(query, records)
-    → build_context_prompt(query, top_chunks)
-    → OrbitLLM.chat(...)
+repl(agent, collection)
+    → inject retrieved context per turn
+    → provide tool schemas from tools/ registry to LLM decision call
+    → execute requested tools (requesting confirmation for DANGEROUS/SENSITIVE operations)
+    → stream final token response to stdout
 ```
-
-Retrieval is a plain Python list + linear scan — genuinely fine at the
-scale of a single project's source (hundreds to low thousands of chunks).
-It does **not** scale to large monorepos or company-wide search; a real
-vector index (e.g. Chroma) would replace the linear scan at that point
-without changing anything upstream of it.
 
 ## Usage
 
 ```bash
-# Index and chat against a single file
-python orbit_repl.py providers/base.py
+# Index current directory and start Orbit REPL
+python repl.py ./
 
-# Index and chat against an entire directory
-python orbit_repl.py ./
+# Specify provider and model
+python repl.py ./ --provider groq --model llama-3.3-70b-versatile
 ```
 
 REPL commands:
-- `quit` / `exit` — leave
-- `reset` / `clear` — clear conversation memory (index stays loaded)
+- `quit` / `exit` — exit REPL
+- `reset` / `clear` — clear conversation state (indexed collection remains persistent)
 
-Conversation history stores only the clean question/answer pairs — the
-retrieved context is injected fresh per turn and is not carried forward,
-to avoid unbounded context growth across a long session.
+### Running Unit Tests
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
 
 ## Configuration
 
@@ -144,26 +142,18 @@ to avoid unbounded context growth across a long session.
 | `OPENAI_API_KEY` | `OpenAIProvider` |
 | `HF_TOKEN` | `HuggingFaceProvider` |
 | `GEMINI_API_KEY` | `GeminiProvider` |
+| `GROQ_API_KEY` | `GroqProvider` |
 
 Set these in a local `.env` file (never commit it — see `.gitignore`).
 Ollama requires no key but must be running locally with the relevant
 models pulled (e.g. `ollama pull llama3.2`, `ollama pull nomic-embed-text`).
 
 **Security note:** the indexer explicitly excludes `.env` and other
-credential-shaped files/extensions from indexing — secrets must never end
-up embedded in the retrieval index.
+credential-shaped files/extensions from indexing. Dangerous tool operations
+(`write_file`, `run_shell_command`, `git_commit`, `git_push`) enforce explicit user confirmation prompts and audit logging (`.orbit/audit.log`).
 
-## Known limitations
+## Known Limitations
 
-- Retrieval is a linear scan (fine at project scale, not at scale-out).
-- Grounding reduces but does not eliminate hallucination — a model can
-  retrieve real symbol names correctly and still invent a plausible-looking
-  but incorrect method signature or argument order around them. Larger
-  models (e.g. `llama3.2` vs `qwen:0.5b`) noticeably improve faithfulness
-  to retrieved context, but don't eliminate the issue.
-- `is_available()` semantics differ slightly per provider (Ollama checks
-  live server reachability for free; API-based providers trade off
-  cost-per-check against certainty — see provider docstrings).
-- Tree-sitter chunking has not been validated against every language in
-  the support matrix on real-world files — treat exotic language edge
-  cases as untested until exercised.
+- Retrieval relies on local Ollama service for embedding generation (`nomic-embed-text`).
+- Grounding reduces but does not eliminate hallucination.
+- Tree-sitter grammar support requires language pack availability.

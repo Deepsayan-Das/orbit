@@ -37,6 +37,11 @@ orbit/
 ├── docs/                # Architecture and technical documentation
 │   └── ARCHITECTURE.md
 └── tests/               # Automated unit test suite
+    ├── test_chunker.py  # Unit tests for AST chunker & module summarizer
+    ├── test_rag.py      # Unit tests for ChromaDB indexer, hashing & retrieval
+    ├── test_tools.py    # Core tests for tool registry & basic tools
+    ├── test_new_tools.py# Unit tests for read_file, shell, git, container & dev tools
+    └── test_phase12_tools.py # Validation for filesystem tool registration & risk levels
 ```
 
 ---
