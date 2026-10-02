@@ -5,6 +5,7 @@ Provides tool registry, risk levels (ToolRiskLevel), persistent audit logging, a
 
 from .registry import (
     ToolRiskLevel,
+    build_confirmation_display,
     clear_registry,
     execute_tool,
     execute_tool_unsafe_for_testing_only,
@@ -14,7 +15,8 @@ from .registry import (
     log_audit_event,
     register_tool,
 )
-from .filesystem import list_directory, register_filesystem_tools, write_file
+from .diff_utils import compute_unified_diff, validate_and_replace
+from .filesystem import edit_file, list_directory, register_filesystem_tools, write_file
 from .read_file import read_file
 from .shell import is_safe_command, run_shell_command
 from .git_tools import git_blame, git_commit, git_diff, git_log, git_push, git_status
@@ -29,13 +31,17 @@ __all__ = [
     "get_tools_schema",
     "execute_tool",
     "execute_tool_unsafe_for_testing_only",
+    "build_confirmation_display",
     "log_audit_event",
     "list_registered_tools",
     "clear_registry",
+    "compute_unified_diff",
+    "validate_and_replace",
     "list_directory",
     "register_filesystem_tools",
     "read_file",
     "write_file",
+    "edit_file",
     "run_shell_command",
     "is_safe_command",
     "git_status",

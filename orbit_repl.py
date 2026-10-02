@@ -12,25 +12,28 @@ from rag.retrieval import (
     embed,
     retrieve,
 )
-from repl import PROVIDER, SYSTEM_PROMPT, repl, stream_reply
+from repl import SYSTEM_PROMPT, repl, stream_reply
 
 if __name__ == "__main__":
     import os
     import sys
     from pathlib import Path
     import argparse
+    from config import load_config
     from llm_client import OrbitLLM
     from rag.indexer import get_orbit_collection
 
+    cfg = load_config()
+
     parser = argparse.ArgumentParser(description="Orbit Interactive RAG REPL")
     parser.add_argument("target", nargs="?", default="./", help="Directory or file path to index (default: ./)")
-    parser.add_argument("--provider", default=os.getenv("ORBIT_PROVIDER", PROVIDER), help="LLM Provider: ollama, huggingface, openai, gemini")
-    parser.add_argument("--model", default=os.getenv("ORBIT_MODEL", "llama3.2:latest"), help="Model name")
+    parser.add_argument("--provider", default=os.getenv("ORBIT_PROVIDER", cfg.provider), help="LLM Provider: ollama, huggingface, openai, gemini, groq")
+    parser.add_argument("--model", default=os.getenv("ORBIT_MODEL", cfg.model), help="Model name")
 
     args = parser.parse_args()
 
-    provider_name = args.provider.lower()
-    model_name = args.model
+    cfg.provider = args.provider.lower()
+    cfg.model = args.model
     target = args.target
 
     collection = get_orbit_collection()
@@ -42,6 +45,6 @@ if __name__ == "__main__":
     else:
         index_file(target, collection=collection)
 
-    print(f"[Orbit] Initializing LLM client (provider='{provider_name}', model='{model_name}')...")
-    agent = OrbitLLM(provider=provider_name, model=model_name)
+    print(f"[Orbit] Initializing LLM client (provider='{cfg.provider}', model='{cfg.model}')...")
+    agent = OrbitLLM.from_config(cfg)
     repl(agent, collection)

@@ -7,13 +7,29 @@ from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk
 class OllamaProvider(BaseLLMProvider):
     """Ollama Local Model Provider supporting multi-turn chat and token streaming."""
 
-    def __init__(self, model: str = "qwen:0.5b", host: Optional[str] = None):
+    def __init__(
+        self,
+        model: str = "qwen:0.5b",
+        host: Optional[str] = None,
+        num_ctx: Optional[int] = None,
+        **kwargs: Any
+    ):
         self.model = model
         self.host = host
+        self.num_ctx = num_ctx
         if host:
             self.client = ollama.Client(host=host)
         else:
             self.client = ollama
+
+    def _prepare_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        kw = dict(kwargs)
+        options = dict(kw.get("options", {}) or {})
+        if self.num_ctx is not None and "num_ctx" not in options:
+            options["num_ctx"] = self.num_ctx
+        if options:
+            kw["options"] = options
+        return kw
 
     def chat(
         self,
@@ -22,11 +38,12 @@ class OllamaProvider(BaseLLMProvider):
         **kwargs: Any
     ) -> Union[LLMResponse, Iterator[StreamChunk]]:
         formatted_messages = [msg.to_dict() for msg in messages]
+        prepared_kwargs = self._prepare_kwargs(kwargs)
 
         if stream:
-            return self._stream_chat(formatted_messages, **kwargs)
+            return self._stream_chat(formatted_messages, **prepared_kwargs)
         else:
-            return self._sync_chat(formatted_messages, **kwargs)
+            return self._sync_chat(formatted_messages, **prepared_kwargs)
 
     def _sync_chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> LLMResponse:
         raw_resp = self.client.chat(

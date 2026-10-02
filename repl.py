@@ -11,9 +11,14 @@ Pipeline:
 import os
 import sys
 from pathlib import Path
+
+from config import load_config
 from typing import Any, Optional
 
 
+from agent_loop import run_agent_turn
+from commands import Session, dispatch
+from config import OrbitConfig, load_config
 from llm_client import OrbitLLM
 from providers import ChatMessage
 from rag.indexer import get_orbit_collection, index_directory, index_file
@@ -29,8 +34,6 @@ SYSTEM_PROMPT = (
 
 
 EMBED_MODEL = "nomic-embed-text"
-PROVIDER = "ollama"  # Options: "huggingface", "ollama", "openai", "gemini", "groq"
-CHAT_MODEL = "llama3.2:latest"  # e.g. "Qwen/Qwen2.5-Coder-7B-Instruct", "llama3.2:latest"
 
 
 def extract_tool_calls(raw_response: Any) -> list:
@@ -87,70 +90,111 @@ def stream_reply(agent: OrbitLLM, messages, system_prompt: str) -> str:
     return full_response
 
 
-def repl(agent: OrbitLLM, collection):
-    """Interactive REPL loop orchestrating context retrieval, tool integration, and chat generation."""
-    history: list[ChatMessage] = []
+def repl(
+    agent: OrbitLLM,
+    collection,
+    config: Optional[OrbitConfig] = None,
+    target_path: str = "./",
+):
+    """Interactive REPL loop orchestrating context retrieval, tool integration, slash commands, and chat generation."""
+    if config is None:
+        config = load_config()
+
+    session = Session(
+        agent=agent,
+        config=config,
+        collection=collection,
+        target_path=target_path,
+        max_steps=8,
+    )
+
     registered_tools = tools.get_tools_schema()
     tool_count = len(registered_tools)
-    chunk_count = collection.count()
+    chunk_count = collection.count() if hasattr(collection, "count") else 0
 
-    print(f"Orbit ready. Persistent collection indexed ({chunk_count} chunks, {tool_count} tools available). Type 'quit' to exit.\n")
+    try:
+        from ui import (
+            print_banner,
+            print_error,
+            print_info,
+            print_orbit_response,
+            print_step_limit_warning,
+            print_user_prompt_label,
+            print_warning,
+        )
+        print_banner(
+            chunk_count,
+            tool_count,
+            provider=getattr(session.config, "provider", ""),
+            model=getattr(session.config, "model", ""),
+        )
+    except Exception:
+        print(f"Orbit ready. Persistent collection indexed ({chunk_count} chunks, {tool_count} tools available). Type '/help' for commands.\n")
+        print_info = print_warning = print_error = print
 
     while True:
         try:
-            user_input = input(">> ").strip()
-            if user_input in ("quit", "exit"):
-                break
-            if user_input in ("reset", "clear"):
-                history = []
-                print("[history cleared]")
-                continue
+            try:
+                from ui import console
+                user_input = console.input("[bold cyan]orbit > [/bold cyan]").strip()
+            except Exception:
+                user_input = input(">> ").strip()
+
             if not user_input:
                 continue
 
+            # Check if input is a slash command or a bare word command alias
+            if user_input.startswith("/") or user_input.lower() in ("quit", "exit", "reset", "clear"):
+                output = dispatch(user_input, session)
+                if output:
+                    try:
+                        from ui import print_info
+                        print_info(output)
+                    except Exception:
+                        print(output)
+                if session.should_exit:
+                    break
+                continue
+
             # Retrieve fresh context for THIS turn only from persistent ChromaDB collection
-            top_chunks = retrieve(user_input, collection=collection)
+            top_chunks = retrieve(user_input, collection=session.collection)
+            if session.show_sources:
+                try:
+                    from ui import console
+                    console.print(f"[dim][sources] Retrieved {len(top_chunks)} context chunks.[/dim]")
+                    for i, chunk in enumerate(top_chunks, 1):
+                        src = chunk.metadata.get("source", "unknown") if hasattr(chunk, "metadata") and isinstance(chunk.metadata, dict) else "unknown"
+                        console.print(f"[dim]  Chunk {i}: {src}[/dim]")
+                except Exception:
+                    print(f"[sources: retrieved {len(top_chunks)} chunks]")
+
             grounded_prompt = build_context_prompt(user_input, top_chunks)
 
             # Send: clean history + this turn's grounded prompt
-            current_turn_messages = history + [ChatMessage(role="user", content=grounded_prompt)]
-            MAX_TOOL_TURNS = 5
-            tool_turn = 0
+            current_turn_messages = session.history + [ChatMessage(role="user", content=grounded_prompt)]
 
-            while tool_turn < MAX_TOOL_TURNS:
-                # Decision call with tools attached (non-streamed)
-                check_resp = agent.chat(
-                    messages=current_turn_messages,
-                    system_prompt=SYSTEM_PROMPT,
-                    stream=False,
-                    tools=registered_tools
-                )
+            # ── Agentic loop: multi-step tool chaining ────────────────
+            result = run_agent_turn(
+                agent=session.agent,
+                messages=current_turn_messages,
+                system_prompt=SYSTEM_PROMPT,
+                registered_tools=registered_tools,
+                max_steps=session.max_steps,
+                print_status=True,
+                stream_final=True,
+            )
 
-                tool_calls = extract_tool_calls(check_resp.raw_response)
-                if not tool_calls:
-                    break
+            if result.hit_step_limit:
+                try:
+                    from ui import print_step_limit_warning
+                    print_step_limit_warning(result.steps_taken)
+                except Exception:
+                    print(f"\n[agent completed with step-limit reached after {result.steps_taken} steps]")
 
-                tool_executed = False
-                for call in tool_calls:
-                    fn_name, fn_args = parse_tool_call(call)
-                    if fn_name and tools.get_tool(fn_name):
-                        tool_result = tools.execute_tool(fn_name, fn_args)
-                        print(f"\n[tool executed] {fn_name}({fn_args}) -> {str(tool_result)[:100]}...")
+            full_response = result.content
 
-                        current_turn_messages.append(ChatMessage(role="assistant", content="", tool_calls=tool_calls))
-                        current_turn_messages.append(ChatMessage(role="tool", content=f"[Tool Result for {fn_name}]:\n{str(tool_result)}", name=fn_name))
-                        tool_executed = True
-                        break
-
-                if not tool_executed:
-                    break
-
-                tool_turn += 1
-
-            # Final step: Stream response to stdout without tools attached
-            full_response = stream_reply(agent, current_turn_messages, SYSTEM_PROMPT)
-            history.append(ChatMessage(role="user", content=user_input))
-            history.append(ChatMessage(role="assistant", content=full_response))
+            session.history.append(ChatMessage(role="user", content=user_input))
+            session.history.append(ChatMessage(role="assistant", content=full_response))
 
         except KeyboardInterrupt:
             print("\n[interrupted, exiting]")
@@ -159,23 +203,30 @@ def repl(agent: OrbitLLM, collection):
             print("\n[EOF, exiting]")
             break
         except Exception as e:
-            print(f"\n[error: {e}]")
+            try:
+                from ui import print_error
+                print_error(f"Error: {e}")
+            except Exception:
+                print(f"\n[error: {e}]")
             break
-
 
 
 if __name__ == "__main__":
     import argparse
 
+    # Load persisted config as the base (provides defaults)
+    cfg = load_config()
+
     parser = argparse.ArgumentParser(description="Orbit Interactive RAG REPL")
     parser.add_argument("target", nargs="?", default="./", help="Directory or file path to index (default: ./)")
-    parser.add_argument("--provider", default=os.getenv("ORBIT_PROVIDER", PROVIDER), help="LLM Provider: ollama, huggingface, openai, gemini")
-    parser.add_argument("--model", default=os.getenv("ORBIT_MODEL", CHAT_MODEL), help="Model name (e.g. Qwen/Qwen2.5-Coder-7B-Instruct, llama3.2)")
+    parser.add_argument("--provider", default=os.getenv("ORBIT_PROVIDER", cfg.provider), help="LLM Provider: ollama, huggingface, openai, gemini, groq")
+    parser.add_argument("--model", default=os.getenv("ORBIT_MODEL", cfg.model), help="Model name (e.g. Qwen/Qwen2.5-Coder-7B-Instruct, llama3.2)")
 
     args = parser.parse_args()
 
-    provider_name = args.provider.lower()
-    model_name = args.model
+    # CLI / env overrides take precedence over config file
+    cfg.provider = args.provider.lower()
+    cfg.model = args.model
 
     target = args.target
     path = Path(target)
@@ -188,6 +239,6 @@ if __name__ == "__main__":
     else:
         index_file(target, collection=collection)
 
-    print(f"[Orbit] Initializing LLM client (provider='{provider_name}', model='{model_name}')...")
-    agent = OrbitLLM(provider=provider_name, model=model_name)
-    repl(agent, collection)
+    print(f"[Orbit] Initializing LLM client (provider='{cfg.provider}', model='{cfg.model}')...")
+    agent = OrbitLLM.from_config(cfg)
+    repl(agent, collection, config=cfg, target_path=target)

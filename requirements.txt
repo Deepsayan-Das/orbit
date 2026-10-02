@@ -3,3 +3,6 @@ python-dotenv
 openai
 huggingface_hub
 google-genai
+pyyaml
+survey
+rich
