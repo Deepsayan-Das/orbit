@@ -27,6 +27,30 @@ def extract_tool_calls(raw_response: Any) -> list:
     """Extract tool calls list from raw provider response object or dict."""
     if not raw_response:
         return []
+
+    # 1. Gemini GenAI SDK function_calls attribute
+    fn_calls = getattr(raw_response, "function_calls", None)
+    if fn_calls:
+        res = []
+        for fc in fn_calls:
+            name = getattr(fc, "name", "") or (fc.get("name") if isinstance(fc, dict) else "")
+            args = getattr(fc, "args", {}) or (fc.get("args") if isinstance(fc, dict) else {})
+            if isinstance(args, dict):
+                args_dict = dict(args)
+            else:
+                try:
+                    args_dict = dict(args)
+                except Exception:
+                    args_dict = {}
+            res.append({
+                "function": {
+                    "name": name,
+                    "arguments": args_dict
+                }
+            })
+        return res
+
+    # 2. OpenAI / Ollama standard tool calls format
     if isinstance(raw_response, dict):
         msg = raw_response.get("message", {})
         if isinstance(msg, dict):
