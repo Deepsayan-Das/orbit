@@ -106,14 +106,24 @@ def _pick_tools(available: list[str], currently_enabled: list[str]) -> list[str]
         print("  No tools registered — skipping.")
         return []
 
-    # Build pre-selection indices
-    pre_selected = [i for i, name in enumerate(available) if name in currently_enabled]
+    # Build pre-selection indices set
+    pre_selected = set(i for i, name in enumerate(available) if name in currently_enabled)
 
-    indices = survey.routines.basket(
-        "Enable tools (space to toggle, enter to confirm): ",
-        options=available,
-        checked=pre_selected if pre_selected else None,
-    )
+    try:
+        indices = survey.routines.basket(
+            "Enable tools (space to toggle, enter to confirm): ",
+            options=available,
+            active=pre_selected,
+        )
+    except Exception:
+        try:
+            indices = survey.routines.basket(
+                "Enable tools (space to toggle, enter to confirm): ",
+                options=available,
+            )
+        except Exception:
+            indices = []
+
     return [available[i] for i in indices] if indices else []
 
 
