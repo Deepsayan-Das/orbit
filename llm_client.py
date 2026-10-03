@@ -19,6 +19,20 @@ from providers import (
 )
 
 
+import time
+
+
+def is_transient_503(exception: Exception) -> bool:
+    """Check if exception is a 503 / Service Unavailable / overloaded error."""
+    err_str = str(exception).lower()
+    if any(keyword in err_str for keyword in ("503", "unavailable", "overloaded", "resource_exhausted", "service unavailable", "capacity")):
+        return True
+    status_code = getattr(exception, "status_code", None) or getattr(exception, "code", None)
+    if status_code in (503, "503"):
+        return True
+    return False
+
+
 class OrbitLLM:
     """
     Unified LLM Client facade for Orbit.
@@ -104,16 +118,24 @@ class OrbitLLM:
         **kwargs: Any
     ) -> Union[LLMResponse, Iterator[StreamChunk]]:
         """
-        Process multi-turn messages or single prompt strings.
-        
-        Args:
-            messages: Single prompt string, ChatMessage object, message dict, or list of messages.
-            system_prompt: Optional system prompt to prepend.
-            stream: If True, returns an Iterator[StreamChunk] yielding tokens in real-time.
-                    If False, returns complete LLMResponse.
+        Process multi-turn messages or single prompt strings with automatic 503 retries.
         """
         normalized = normalize_messages(messages, system_prompt=system_prompt)
-        return self.provider.chat(messages=normalized, stream=stream, **kwargs)
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                return self.provider.chat(messages=normalized, stream=stream, **kwargs)
+            except Exception as e:
+                if is_transient_503(e) and attempt < max_retries:
+                    wait_time = attempt * 2.0
+                    try:
+                        from ui import print_warning
+                        print_warning(f"503 Service Unavailable ({e}). Retrying attempt {attempt + 1}/{max_retries} in {wait_time:.1f}s...")
+                    except Exception:
+                        print(f"[orbit: 503 API error ({e}). Retrying attempt {attempt + 1}/{max_retries} in {wait_time:.1f}s...]")
+                    time.sleep(wait_time)
+                else:
+                    raise
 
     def generate(
         self, 

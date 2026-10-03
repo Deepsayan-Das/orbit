@@ -85,6 +85,44 @@ class TestToolRegistry(unittest.TestCase):
         res = execute_tool("safe_func", {})
         self.assertEqual(res, "safe")
 
+    def test_write_and_edit_file_are_safe(self):
+        from tools import ToolRiskLevel
+        from tools.filesystem import register_filesystem_tools
+        register_filesystem_tools()
+        write_info = get_tool("write_file")
+        edit_info = get_tool("edit_file")
+        self.assertEqual(write_info["risk_level"], ToolRiskLevel.SAFE)
+        self.assertEqual(edit_info["risk_level"], ToolRiskLevel.SAFE)
+
+    def test_503_retry_loop(self):
+        from unittest.mock import MagicMock
+        from llm_client import OrbitLLM
+        from providers import BaseLLMProvider, LLMResponse
+
+        mock_provider = MagicMock(spec=BaseLLMProvider)
+        attempts = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise Exception("503 Service Unavailable")
+            return LLMResponse(content="success", model="test")
+
+        mock_provider.chat.side_effect = side_effect
+        agent = OrbitLLM(provider=mock_provider)
+
+        # Mock time.sleep to run instantly during unit test
+        import time
+        orig_sleep = time.sleep
+        time.sleep = lambda s: None
+        try:
+            resp = agent.chat("hello")
+            self.assertEqual(resp.content, "success")
+            self.assertEqual(attempts, 3)
+        finally:
+            time.sleep = orig_sleep
+
 
 if __name__ == "__main__":
     unittest.main()

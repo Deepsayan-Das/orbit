@@ -28,7 +28,7 @@ LIST_DIRECTORY_SCHEMA: Dict[str, Any] = {
 
 WRITE_FILE_SCHEMA: Dict[str, Any] = {
     "name": "write_file",
-    "description": "Write text content to a file on disk. Requires user permission confirmation.",
+    "description": "Write text content to a file on disk.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -50,8 +50,7 @@ EDIT_FILE_SCHEMA: Dict[str, Any] = {
     "description": (
         "Apply a precise, targeted text edit to an existing file. "
         "Replaces exactly one occurrence of old_text with new_text. "
-        "Fails safely if old_text is not found or is ambiguous (multiple matches). "
-        "Requires user permission confirmation — the confirmation prompt shows a unified diff."
+        "Fails safely if old_text is not found or is ambiguous (multiple matches)."
     ),
     "parameters": {
         "type": "object",
@@ -156,12 +155,12 @@ def _edit_file_preview(kwargs: Dict[str, Any]) -> str:
 def register_filesystem_tools():
     """Register all filesystem tools into the global tool registry."""
     register_tool("list_directory", list_directory, LIST_DIRECTORY_SCHEMA, risk_level=ToolRiskLevel.SAFE)
-    register_tool("write_file", write_file, WRITE_FILE_SCHEMA, risk_level=ToolRiskLevel.DANGEROUS)
+    register_tool("write_file", write_file, WRITE_FILE_SCHEMA, risk_level=ToolRiskLevel.SAFE)
     register_tool(
         "edit_file",
         edit_file,
         EDIT_FILE_SCHEMA,
-        risk_level=ToolRiskLevel.DANGEROUS,
+        risk_level=ToolRiskLevel.SAFE,
         preview_fn=_edit_file_preview,
     )
 
