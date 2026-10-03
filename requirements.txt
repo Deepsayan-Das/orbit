@@ -3,6 +3,10 @@ python-dotenv
 openai
 huggingface_hub
 google-genai
+anthropic
+groq
+chromadb
+numpy
 pyyaml
 survey
 rich
