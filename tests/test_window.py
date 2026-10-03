@@ -56,6 +56,14 @@ class TestWindowResolver(unittest.TestCase):
         self.assertIn("options", kwargs_called)
         self.assertEqual(kwargs_called["options"].get("num_ctx"), 8192)
 
+    def test_from_config_non_ollama_provider_does_not_fail(self):
+        """OrbitLLM.from_config constructs non-Ollama providers without TypeError."""
+        from llm_client import OrbitLLM
+        cfg = OrbitConfig(provider="gemini", model="gemini-2.0-flash")
+        agent = OrbitLLM.from_config(cfg)
+        self.assertEqual(agent.window_size, 1000000)
+        self.assertEqual(agent.provider.model, "gemini-2.0-flash")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,7 @@ load_dotenv()
 class HuggingFaceProvider(BaseLLMProvider):
     """Hugging Face Inference API Provider implementation."""
 
-    def __init__(self, model: str = "Qwen/Qwen2.5-Coder-7B-Instruct", token: Optional[str] = None, hf_provider: Optional[str] = None):
+    def __init__(self, model: str = "Qwen/Qwen2.5-Coder-7B-Instruct", token: Optional[str] = None, hf_provider: Optional[str] = None, **kwargs: Any):
         self.model = model
         self.token = token or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_API_KEY")
         self.hf_provider = hf_provider or os.getenv("HF_PROVIDER")

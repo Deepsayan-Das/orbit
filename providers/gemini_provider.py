@@ -12,7 +12,7 @@ load_dotenv()
 class GeminiProvider(BaseLLMProvider):
     """Google Gemini API Provider implementation using official google-genai SDK."""
 
-    def __init__(self, model: str = "gemini-2.5-flash", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gemini-2.5-flash", api_key: Optional[str] = None, **kwargs: Any):
         self.model = model
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self._client: Optional[genai.Client] = None

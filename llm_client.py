@@ -40,7 +40,7 @@ class OrbitLLM:
         **provider_kwargs: Any
     ):
         from context.window import resolve_window
-        num_ctx = provider_kwargs.get("num_ctx")
+        num_ctx = provider_kwargs.pop("num_ctx", None)
         if isinstance(provider, BaseLLMProvider):
             self.provider = provider
             prov_name = getattr(provider, "__class__", {}).__name__.lower().replace("provider", "")
@@ -60,7 +60,7 @@ class OrbitLLM:
             w_size, w_source = resolve_window(provider_key, model or "")
             self.window_size = num_ctx if num_ctx is not None else w_size
             self.window_source = "user" if num_ctx is not None else w_source
-            if "num_ctx" not in provider_kwargs and provider_key == "ollama":
+            if provider_key == "ollama":
                 provider_kwargs["num_ctx"] = self.window_size
             self.provider = provider_cls(**provider_kwargs)
         else:
@@ -85,9 +85,8 @@ class OrbitLLM:
             provider_kwargs.update(per_provider)
 
         win_size, win_source = resolve_window(provider_key, cfg.model, cfg)
-        provider_kwargs["num_ctx"] = win_size
 
-        instance = cls(provider=provider_key, model=cfg.model, **provider_kwargs)
+        instance = cls(provider=provider_key, model=cfg.model, num_ctx=win_size, **provider_kwargs)
         instance.window_size = win_size
         instance.window_source = win_source
         return instance
