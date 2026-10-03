@@ -41,8 +41,11 @@ COMMON_ENGLISH_WORDS = {
 
 def embed(text: str) -> List[float]:
     """Generate vector embedding for prompt text using Ollama nomic-embed-text."""
-    response = ollama.embeddings(model=EMBED_MODEL, prompt=text)
-    return response["embedding"]
+    try:
+        response = ollama.embeddings(model=EMBED_MODEL, prompt=text)
+        return response["embedding"]
+    except Exception as e:
+        raise RuntimeError(f"Ollama embedding service unavailable: {e}") from e
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -105,86 +108,93 @@ def retrieve(
     """
     Retrieve top-k relevant code/prose chunks for a user query.
     First queries with original natural language text; applies typo correction fallback only if top score is poor (< 0.45).
+    Returns [] gracefully if embedding service is unavailable.
     """
-    if collection is not None:
-        query_vec = embed(query)
-        results = collection.query(
-            query_embeddings=[query_vec],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"]
-        )
+    try:
+        if collection is not None:
+            query_vec = embed(query)
+            results = collection.query(
+                query_embeddings=[query_vec],
+                n_results=top_k,
+                include=["documents", "metadatas", "distances"]
+            )
 
-        retrieved = _format_chroma_results(results)
-        max_score = max([r["score"] for r in retrieved], default=0.0)
+            retrieved = _format_chroma_results(results)
+            max_score = max([r["score"] for r in retrieved], default=0.0)
 
-        # Fallback typo correction if initial retrieval score is weak
-        if max_score < 0.45:
-            if known_symbols is None:
-                known_symbols_set = set()
-                try:
-                    data = collection.get(include=["metadatas"])
-                    for meta in data.get("metadatas", []):
-                        syms_str = meta.get("symbols", "")
-                        if syms_str:
-                            for s in syms_str.split(","):
-                                if s.strip():
-                                    known_symbols_set.add(s.strip())
-                        if meta.get("symbol"):
-                            known_symbols_set.add(meta["symbol"])
-                except Exception:
-                    pass
-                known_symbols = list(known_symbols_set)
+            # Fallback typo correction if initial retrieval score is weak
+            if max_score < 0.45:
+                if known_symbols is None:
+                    known_symbols_set = set()
+                    try:
+                        data = collection.get(include=["metadatas"])
+                        for meta in data.get("metadatas", []):
+                            syms_str = meta.get("symbols", "")
+                            if syms_str:
+                                for s in syms_str.split(","):
+                                    if s.strip():
+                                        known_symbols_set.add(s.strip())
+                            if meta.get("symbol"):
+                                known_symbols_set.add(meta["symbol"])
+                    except Exception:
+                        pass
+                    known_symbols = list(known_symbols_set)
 
-            corrected_query = correct_query_terms(query, known_symbols)
-            if corrected_query != query:
-                print(f"[orbit] typo correction: '{query}' -> '{corrected_query}'")
-                query_vec = embed(corrected_query)
-                results = collection.query(
-                    query_embeddings=[query_vec],
-                    n_results=top_k,
-                    include=["documents", "metadatas", "distances"]
-                )
-                retrieved = _format_chroma_results(results)
+                corrected_query = correct_query_terms(query, known_symbols)
+                if corrected_query != query:
+                    print(f"[orbit] typo correction: '{query}' -> '{corrected_query}'")
+                    query_vec = embed(corrected_query)
+                    results = collection.query(
+                        query_embeddings=[query_vec],
+                        n_results=top_k,
+                        include=["documents", "metadatas", "distances"]
+                    )
+                    retrieved = _format_chroma_results(results)
 
-        return retrieved
+            return retrieved
 
-    elif records is not None:
-        query_vec = embed(query)
-        scored = [
-            {**r, "score": cosine_similarity(query_vec, r["embedding"])}
-            for r in records
-        ]
-        scored.sort(key=lambda r: r["score"], reverse=True)
-        max_score = scored[0]["score"] if scored else 0.0
+        elif records is not None:
+            query_vec = embed(query)
+            scored = [
+                {**r, "score": cosine_similarity(query_vec, r["embedding"])}
+                for r in records
+            ]
+            scored.sort(key=lambda r: r["score"], reverse=True)
+            max_score = scored[0]["score"] if scored else 0.0
 
-        if max_score < 0.45:
-            if known_symbols is None:
-                known_symbols_set = set()
-                for r in records:
-                    for sym in r.get("symbols", []):
-                        known_symbols_set.add(sym)
-                    if "symbol" in r and r["symbol"]:
-                        known_symbols_set.add(r["symbol"])
-                known_symbols = list(known_symbols_set)
+            if max_score < 0.45:
+                if known_symbols is None:
+                    known_symbols_set = set()
+                    for r in records:
+                        for sym in r.get("symbols", []):
+                            known_symbols_set.add(sym)
+                        if "symbol" in r and r["symbol"]:
+                            known_symbols_set.add(r["symbol"])
+                    known_symbols = list(known_symbols_set)
 
-            corrected_query = correct_query_terms(query, known_symbols)
-            if corrected_query != query:
-                print(f"[orbit] typo correction: '{query}' -> '{corrected_query}'")
-                query_vec = embed(corrected_query)
-                scored = [
-                    {**r, "score": cosine_similarity(query_vec, r["embedding"])}
-                    for r in records
-                ]
-                scored.sort(key=lambda r: r["score"], reverse=True)
+                corrected_query = correct_query_terms(query, known_symbols)
+                if corrected_query != query:
+                    print(f"[orbit] typo correction: '{query}' -> '{corrected_query}'")
+                    query_vec = embed(corrected_query)
+                    scored = [
+                        {**r, "score": cosine_similarity(query_vec, r["embedding"])}
+                        for r in records
+                    ]
+                    scored.sort(key=lambda r: r["score"], reverse=True)
 
-        return scored[:top_k]
+            return scored[:top_k]
 
-    else:
+        else:
+            return []
+    except Exception:
         return []
 
 
 def build_context_prompt(query: str, top_chunks: List[Dict[str, Any]]) -> str:
     """Format retrieved code chunks into prompt context for LLM generation."""
+    if not top_chunks:
+        return query
+
     context = "\n\n---\n\n".join(
         f"# from {c['source']}\n{c['text']}" for c in top_chunks
     )

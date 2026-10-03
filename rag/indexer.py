@@ -208,13 +208,22 @@ def index_directory(
     base_path = Path(dirpath)
 
     if base_path.is_file():
-        return index_file(str(base_path), collection)
+        try:
+            return index_file(str(base_path), collection)
+        except Exception:
+            return []
 
+    warned_ollama = False
     for path in base_path.rglob("*"):
         if path.is_file() and not is_ignored_path(path):
             try:
                 records.extend(index_file(str(path), collection))
             except Exception as e:
-                print(f"[warn] skipping {path}: {e}")
+                if not warned_ollama and "Ollama embedding service unavailable" in str(e):
+                    print("  [note: Ollama embedding service (nomic-embed-text) not detected. Vector RAG indexing skipped, but Orbit LLM client remains fully functional.]")
+                    warned_ollama = True
+                    break
+                elif not warned_ollama:
+                    print(f"[warn] skipping {path}: {e}")
 
     return records

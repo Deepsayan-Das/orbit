@@ -157,7 +157,10 @@ def repl(
                 continue
 
             # Retrieve fresh context for THIS turn only from persistent ChromaDB collection
-            top_chunks = retrieve(user_input, collection=session.collection)
+            try:
+                top_chunks = retrieve(user_input, collection=session.collection)
+            except Exception:
+                top_chunks = []
             if session.show_sources:
                 try:
                     from ui import console
@@ -234,10 +237,13 @@ if __name__ == "__main__":
     collection = get_orbit_collection()
 
     print(f"[Orbit] Indexing target path '{target}' into persistent vector store...")
-    if path.is_dir():
-        index_directory(target, collection=collection)
-    else:
-        index_file(target, collection=collection)
+    try:
+        if path.is_dir():
+            index_directory(target, collection=collection)
+        else:
+            index_file(target, collection=collection)
+    except Exception as e:
+        print(f"  [note: RAG indexing skipped ({e}). LLM engine active.]")
 
     print(f"[Orbit] Initializing LLM client (provider='{cfg.provider}', model='{cfg.model}')...")
     agent = OrbitLLM.from_config(cfg)
