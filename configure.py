@@ -29,6 +29,7 @@ _DEFAULT_MODELS = {
     "huggingface": "Qwen/Qwen2.5-Coder-7B-Instruct",
     "gemini":      "gemini-2.5-flash",
     "groq":        "llama-3.3-70b-versatile",
+    "anthropic":   "claude-3-5-sonnet-20241022",
 }
 
 # Environment-variable name each provider typically reads
@@ -37,6 +38,7 @@ _API_KEY_ENV_NAMES = {
     "huggingface": "HF_TOKEN",
     "gemini":      "GEMINI_API_KEY",
     "groq":        "GROQ_API_KEY",
+    "anthropic":   "ANTHROPIC_API_KEY",
 }
 
 

@@ -4,6 +4,7 @@ from .openai_provider import OpenAIProvider
 from .huggingface_provider import HuggingFaceProvider
 from .gemini_provider import GeminiProvider
 from .groq_provider import GroqProvider
+from .anthropic_provider import AnthropicProvider
 
 __all__ = [
     "BaseLLMProvider",
@@ -16,4 +17,5 @@ __all__ = [
     "HuggingFaceProvider",
     "GeminiProvider",
     "GroqProvider",
+    "AnthropicProvider",
 ]

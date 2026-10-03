@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from config import OrbitConfig
 
 from providers import (
+    AnthropicProvider,
     BaseLLMProvider,
     ChatMessage,
     GeminiProvider,
@@ -45,6 +46,7 @@ class OrbitLLM:
         "huggingface": HuggingFaceProvider,
         "gemini": GeminiProvider,
         "groq": GroqProvider,
+        "anthropic": AnthropicProvider,
     }
 
     def __init__(

@@ -98,6 +98,7 @@ class AgentTurnResult:
     steps_taken: int
     hit_step_limit: bool = False
     tool_calls_log: List[Dict[str, Any]] = field(default_factory=list)
+    updated_messages: List[ChatMessage] = field(default_factory=list)
 
 
 # ── Core loop ────────────────────────────────────────────────────────────
@@ -149,7 +150,7 @@ def run_agent_turn(
 
         # ── 1. Ask the model (non-streamed, tools attached) ──────────
         resp = agent.chat(
-            messages=messages,
+            messages=list(messages),
             system_prompt=system_prompt,
             stream=False,
             tools=registered_tools,
@@ -159,6 +160,7 @@ def run_agent_turn(
         raw_tool_calls = extract_tool_calls(resp.raw_response)
         if not raw_tool_calls:
             # Plain content — final answer.
+            messages.append(ChatMessage(role="assistant", content=resp.content or ""))
             if stream_final and print_status:
                 try:
                     from ui import print_orbit_response
@@ -170,6 +172,7 @@ def run_agent_turn(
                 steps_taken=step,
                 hit_step_limit=False,
                 tool_calls_log=tool_calls_log,
+                updated_messages=list(messages),
             )
 
         # ── 3. Execute each tool call in this response ───────────────
@@ -218,11 +221,13 @@ def run_agent_turn(
 
         if not tool_executed_any:
             # Model asked for tools that don't exist — treat as final answer.
+            messages.append(ChatMessage(role="assistant", content=resp.content or ""))
             return AgentTurnResult(
                 content=resp.content,
                 steps_taken=step,
                 hit_step_limit=False,
                 tool_calls_log=tool_calls_log,
+                updated_messages=list(messages),
             )
 
     # ── 4. Max steps reached ─────────────────────────────────────────
@@ -235,11 +240,14 @@ def run_agent_turn(
     )
     ceiling_note = (
         f"\n\n[agent note: step limit ({max_steps}) reached — "
-        "the plan may be incomplete]"
+        "type a message to continue this task, or /steps to raise the limit]"
     )
+    full_content = (final_resp.content or "") + ceiling_note
+    messages.append(ChatMessage(role="assistant", content=full_content))
     return AgentTurnResult(
-        content=(final_resp.content or "") + ceiling_note,
+        content=full_content,
         steps_taken=max_steps,
         hit_step_limit=True,
         tool_calls_log=tool_calls_log,
+        updated_messages=list(messages),
     )

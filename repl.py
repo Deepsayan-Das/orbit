@@ -216,12 +216,14 @@ def repl(
                     from ui import print_step_limit_warning
                     print_step_limit_warning(result.steps_taken)
                 except Exception:
-                    print(f"\n[agent completed with step-limit reached after {result.steps_taken} steps]")
+                    print(f"\nStep limit ({result.steps_taken}) reached. Type a message to continue this task, or /steps to raise the limit.")
 
             full_response = result.content
-
-            session.history.append(ChatMessage(role="user", content=user_input))
-            session.history.append(ChatMessage(role="assistant", content=full_response))
+            if result.updated_messages:
+                session.history = list(result.updated_messages)
+            else:
+                session.history.append(ChatMessage(role="user", content=user_input))
+                session.history.append(ChatMessage(role="assistant", content=full_response))
 
         except KeyboardInterrupt:
             print("\n[interrupted, exiting]")

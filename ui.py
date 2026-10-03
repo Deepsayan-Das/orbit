@@ -157,5 +157,5 @@ def print_error(msg: str) -> None:
 def print_step_limit_warning(steps_taken: int) -> None:
     """Print step limit reached notice."""
     console.print(
-        f"\n[bold yellow](!) Step limit reached after {steps_taken} steps. Compiling final summary...[/bold yellow]\n"
+        f"\n[bold yellow](!) Step limit ({steps_taken}) reached. Type a message to continue this task, or /steps to raise the limit.[/bold yellow]\n"
     )
