@@ -3,7 +3,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 from dotenv import load_dotenv
 
 try:
-    from mistralai import Mistral
+    from mistralai.client import Mistral
 except ImportError:
     Mistral = None
 
