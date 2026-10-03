@@ -30,7 +30,7 @@ SAFE_COMMAND_PREFIXES = {
     "git status", "git diff", "git log", "git branch", "git tag",
     "python --version", "python -v", "pip list", "pip show",
     "node -v", "npm -v",
-    "nova version", "nova system", "nova project doctor", "nova container ps"
+    "nova"
 }
 
 

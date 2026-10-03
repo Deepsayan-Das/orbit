@@ -13,6 +13,7 @@ from providers import (
     GroqProvider,
     HuggingFaceProvider,
     LLMResponse,
+    MistralProvider,
     OllamaProvider,
     OpenAIProvider,
     StreamChunk,
@@ -47,6 +48,7 @@ class OrbitLLM:
         "gemini": GeminiProvider,
         "groq": GroqProvider,
         "anthropic": AnthropicProvider,
+        "mistral": MistralProvider,
     }
 
     def __init__(

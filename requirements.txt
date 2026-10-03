@@ -4,6 +4,7 @@ openai
 huggingface_hub
 google-genai
 anthropic
+mistralai
 groq
 chromadb
 numpy

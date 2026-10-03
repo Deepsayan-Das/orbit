@@ -30,6 +30,7 @@ _DEFAULT_MODELS = {
     "gemini":      "gemini-2.5-flash",
     "groq":        "llama-3.3-70b-versatile",
     "anthropic":   "claude-3-5-sonnet-20241022",
+    "mistral":     "mistral-small-latest",
 }
 
 # Environment-variable name each provider typically reads
@@ -39,6 +40,7 @@ _API_KEY_ENV_NAMES = {
     "gemini":      "GEMINI_API_KEY",
     "groq":        "GROQ_API_KEY",
     "anthropic":   "ANTHROPIC_API_KEY",
+    "mistral":     "MISTRAL_API_KEY",
 }
 
 

@@ -46,21 +46,25 @@ CONTAINER_LOGS_SCHEMA: Dict[str, Any] = {
 
 
 def _get_container_cli() -> Optional[str]:
-    """Detect available container CLI executable (podman or docker)."""
-    for cli in ("podman", "docker"):
+    """Detect available container CLI executable (nova, podman, or docker)."""
+    for cli in ("nova", "podman", "docker"):
         if shutil.which(cli):
             return cli
     return None
 
 
 def container_ps(all: bool = False) -> str:
-    """List containers using detected container runtime (podman or docker)."""
+    """List containers using detected container runtime (nova, podman, or docker)."""
     cli = _get_container_cli()
     if not cli:
-        return "Error: No container runtime CLI ('podman' or 'docker') found in system PATH."
+        return "Error: No container runtime CLI ('nova', 'podman', or 'docker') found in system PATH."
 
     try:
-        cmd = [cli, "ps", "-a"] if all else [cli, "ps"]
+        if cli == "nova":
+            cmd = ["nova", "container", "ps", "-a"] if all else ["nova", "container", "ps"]
+        else:
+            cmd = [cli, "ps", "-a"] if all else [cli, "ps"]
+
         proc = subprocess.run(
             cmd,
             capture_output=True,
@@ -78,7 +82,7 @@ def container_logs(name_or_id: str, tail: int = 50) -> str:
     """Fetch recent container logs using detected container runtime."""
     cli = _get_container_cli()
     if not cli:
-        return "Error: No container runtime CLI ('podman' or 'docker') found in system PATH."
+        return "Error: No container runtime CLI ('nova', 'podman', or 'docker') found in system PATH."
 
     if not name_or_id.strip():
         return "Error: Container name_or_id parameter cannot be empty."
@@ -87,7 +91,12 @@ def container_logs(name_or_id: str, tail: int = 50) -> str:
         lines_count = int(tail) if tail is not None else 50
         if lines_count <= 0:
             lines_count = 50
-        cmd = [cli, "logs", f"--tail={lines_count}", name_or_id.strip()]
+
+        if cli == "nova":
+            cmd = ["nova", "container", "logs", name_or_id.strip()]
+        else:
+            cmd = [cli, "logs", f"--tail={lines_count}", name_or_id.strip()]
+
         proc = subprocess.run(
             cmd,
             capture_output=True,

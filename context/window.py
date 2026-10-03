@@ -31,6 +31,9 @@ KNOWN_MODEL_WINDOWS: Dict[str, int] = {
     "deepseek-r1": 64000,
     "deepseek-coder": 64000,
     "mistral": 32768,
+    "mistral-small-latest": 32768,
+    "mistral-large-latest": 128000,
+    "codestral-latest": 32768,
     "mixtral": 32768,
     "codellama": 16384,
 }

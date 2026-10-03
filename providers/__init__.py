@@ -5,6 +5,7 @@ from .huggingface_provider import HuggingFaceProvider
 from .gemini_provider import GeminiProvider
 from .groq_provider import GroqProvider
 from .anthropic_provider import AnthropicProvider
+from .mistral_provider import MistralProvider
 
 __all__ = [
     "BaseLLMProvider",
@@ -18,4 +19,5 @@ __all__ = [
     "GeminiProvider",
     "GroqProvider",
     "AnthropicProvider",
+    "MistralProvider",
 ]
