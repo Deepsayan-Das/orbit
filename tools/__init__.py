@@ -23,8 +23,31 @@ from .git_tools import git_blame, git_commit, git_diff, git_log, git_push, git_s
 from .container_tools import container_logs, container_ps
 from .dev_tools import run_tests, search_logs
 from .code_search import search_codebase
+from agent_sub import delegate_task, register_subagent_tool, run_subagent
+
+
+def reset_default_tools() -> None:
+    """Clear and re-register all standard builtin tools into the tool registry."""
+    clear_registry()
+    register_filesystem_tools()
+    from .read_file import register_read_file_tool
+    from .shell import register_shell_tools
+    from .git_tools import register_git_tools
+    from .container_tools import register_container_tools
+    from .dev_tools import register_dev_tools
+    from .code_search import register_code_search_tools
+
+    register_read_file_tool()
+    register_shell_tools()
+    register_git_tools()
+    register_container_tools()
+    register_dev_tools()
+    register_code_search_tools()
+    register_subagent_tool()
+
 
 __all__ = [
+    "reset_default_tools",
     "ToolRiskLevel",
     "register_tool",
     "get_tool",
@@ -55,4 +78,6 @@ __all__ = [
     "run_tests",
     "search_logs",
     "search_codebase",
+    "delegate_task",
+    "run_subagent",
 ]

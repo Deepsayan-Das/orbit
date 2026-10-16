@@ -19,6 +19,10 @@ class TestToolRegistry(unittest.TestCase):
     def setUp(self):
         clear_registry()
 
+    def tearDown(self):
+        from tools import reset_default_tools
+        reset_default_tools()
+
     def test_register_and_execute_tool(self):
         def add(a: int, b: int) -> int:
             return a + b

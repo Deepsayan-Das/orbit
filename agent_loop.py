@@ -99,6 +99,7 @@ class AgentTurnResult:
     hit_step_limit: bool = False
     tool_calls_log: List[Dict[str, Any]] = field(default_factory=list)
     updated_messages: List[ChatMessage] = field(default_factory=list)
+    usage: Optional[Dict[str, Any]] = None
 
 
 # ── Core loop ────────────────────────────────────────────────────────────
@@ -112,6 +113,7 @@ def run_agent_turn(
     max_steps: int = 8,
     print_status: bool = True,
     stream_final: bool = False,
+    on_token: Optional[Callable[[str], None]] = None,
 ) -> AgentTurnResult:
     """Execute a multi-step agentic loop for one user turn."""
     tool_calls_log: List[Dict[str, Any]] = []
@@ -157,10 +159,18 @@ def run_agent_turn(
         )
 
         # ── 2. Check for tool calls ──────────────────────────────────
-        raw_tool_calls = extract_tool_calls(resp.raw_response)
-        if not raw_tool_calls:
+        tool_calls = getattr(resp, "tool_calls", None) or []
+        if not tool_calls:
+            tool_calls = extract_tool_calls(resp.raw_response)
+
+        if not tool_calls:
             # Plain content — final answer.
             messages.append(ChatMessage(role="assistant", content=resp.content or ""))
+            if on_token:
+                try:
+                    on_token(resp.content or "")
+                except Exception:
+                    pass
             if stream_final and print_status:
                 try:
                     from ui import print_orbit_response
@@ -173,16 +183,23 @@ def run_agent_turn(
                 hit_step_limit=False,
                 tool_calls_log=tool_calls_log,
                 updated_messages=list(messages),
+                usage=getattr(resp, "usage", None),
             )
 
         # ── 3. Execute each tool call in this response ───────────────
         messages.append(
-            ChatMessage(role="assistant", content=resp.content or "", tool_calls=raw_tool_calls)
+            ChatMessage(role="assistant", content=resp.content or "", tool_calls=tool_calls)
         )
-        tool_executed_any = False
-        for call in raw_tool_calls:
-            fn_name, fn_args = parse_tool_call(call)
-            if not fn_name or not tool_registry.get_tool(fn_name):
+        for call in tool_calls:
+            if hasattr(call, "name") and hasattr(call, "args"):
+                fn_name = call.name
+                fn_args = call.args
+                call_id = getattr(call, "id", f"call_{fn_name}")
+            else:
+                fn_name, fn_args = parse_tool_call(call)
+                call_id = getattr(call, "id", None) or (call.get("id") if isinstance(call, dict) else None) or f"call_{fn_name}"
+
+            if not fn_name:
                 continue
 
             if print_status:
@@ -192,8 +209,16 @@ def run_agent_turn(
                 except Exception:
                     print(f"\n[step {step}/{max_steps}] calling {fn_name}...", flush=True)
 
-            # Delegate to the existing registry — permission gate included.
-            tool_result = tool_registry.execute_tool(fn_name, fn_args)
+            if not tool_registry.get_tool(fn_name):
+                avail_names = [
+                    t.get("function", {}).get("name", "")
+                    for t in registered_tools
+                    if isinstance(t, dict) and "function" in t
+                ]
+                tool_result = f"Error: Tool '{fn_name}' not found. Available tools: {', '.join(filter(None, avail_names))}"
+            else:
+                # Delegate to the existing registry — permission gate included.
+                tool_result = tool_registry.execute_tool(fn_name, fn_args)
 
             if print_status:
                 try:
@@ -213,30 +238,20 @@ def run_agent_turn(
             messages.append(
                 ChatMessage(
                     role="tool",
-                    content=f"[Tool Result for {fn_name}]:\n{tool_result}",
+                    content=str(tool_result),
                     name=fn_name,
+                    tool_call_id=call_id,
                 )
-            )
-            tool_executed_any = True
-
-        if not tool_executed_any:
-            # Model asked for tools that don't exist — treat as final answer.
-            messages.append(ChatMessage(role="assistant", content=resp.content or ""))
-            return AgentTurnResult(
-                content=resp.content,
-                steps_taken=step,
-                hit_step_limit=False,
-                tool_calls_log=tool_calls_log,
-                updated_messages=list(messages),
             )
 
     # ── 4. Max steps reached ─────────────────────────────────────────
-    # Do one last plain call (no tools) to get whatever content the model
-    # can produce, then annotate with the ceiling note.
+    # Do one last call to get whatever summary content the model can produce.
+    final_prompt = system_prompt + "\n\nNote: Step limit reached. Summarize your current progress and findings without calling more tools."
     final_resp = agent.chat(
         messages=messages,
-        system_prompt=system_prompt,
+        system_prompt=final_prompt,
         stream=False,
+        tools=registered_tools,
     )
     ceiling_note = (
         f"\n\n[agent note: step limit ({max_steps}) reached — "

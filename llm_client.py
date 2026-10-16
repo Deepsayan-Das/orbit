@@ -51,6 +51,8 @@ class OrbitLLM:
         "mistral": MistralProvider,
     }
 
+    MAX_OLLAMA_DEFAULT_NUM_CTX: int = 16384
+
     def __init__(
         self, 
         provider: Union[str, BaseLLMProvider] = "ollama", 
@@ -59,6 +61,8 @@ class OrbitLLM:
     ):
         from context.window import resolve_window
         num_ctx = provider_kwargs.pop("num_ctx", None)
+        self.generation: Dict[str, Any] = provider_kwargs.pop("generation", {}) or {}
+
         if isinstance(provider, BaseLLMProvider):
             self.provider = provider
             prov_name = getattr(provider, "__class__", {}).__name__.lower().replace("provider", "")
@@ -76,6 +80,8 @@ class OrbitLLM:
             if model:
                 provider_kwargs["model"] = model
             w_size, w_source = resolve_window(provider_key, model or "")
+            if provider_key == "ollama" and num_ctx is None:
+                w_size = min(w_size, self.MAX_OLLAMA_DEFAULT_NUM_CTX)
             self.window_size = num_ctx if num_ctx is not None else w_size
             self.window_source = "user" if num_ctx is not None else w_source
             if provider_key == "ollama":
@@ -103,10 +109,19 @@ class OrbitLLM:
             provider_kwargs.update(per_provider)
 
         win_size, win_source = resolve_window(provider_key, cfg.model, cfg)
+        if provider_key == "ollama" and win_source != "user":
+            win_size = min(win_size, cls.MAX_OLLAMA_DEFAULT_NUM_CTX)
 
-        instance = cls(provider=provider_key, model=cfg.model, num_ctx=win_size, **provider_kwargs)
+        instance = cls(
+            provider=provider_key, 
+            model=cfg.model, 
+            num_ctx=win_size, 
+            generation=cfg.generation,
+            **provider_kwargs
+        )
         instance.window_size = win_size
         instance.window_source = win_source
+        instance.generation = cfg.generation or {}
         return instance
 
     @classmethod
@@ -123,12 +138,16 @@ class OrbitLLM:
     ) -> Union[LLMResponse, Iterator[StreamChunk]]:
         """
         Process multi-turn messages or single prompt strings with automatic 503 retries.
+        Incorporates user configured generation options (temperature, max_tokens).
         """
         normalized = normalize_messages(messages, system_prompt=system_prompt)
+        call_kwargs = dict(self.generation or {})
+        call_kwargs.update(kwargs)
+
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
-                return self.provider.chat(messages=normalized, stream=stream, **kwargs)
+                return self.provider.chat(messages=normalized, stream=stream, **call_kwargs)
             except Exception as e:
                 if is_transient_503(e) and attempt < max_retries:
                     wait_time = attempt * 2.0

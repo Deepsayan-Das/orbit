@@ -5,7 +5,6 @@ Orbit Sub-Agent Subsystem and delegate_task tool implementation.
 import uuid
 from typing import Any, Dict, List, Optional
 
-from agent_loop import run_agent_turn
 from config import load_config
 from llm_client import OrbitLLM
 from providers.base import ChatMessage
@@ -48,6 +47,7 @@ def run_subagent(
         return "[error: sub-agent depth limit (1) exceeded]"
 
     try:
+        from agent_loop import run_agent_turn
         _SUBAGENT_DEPTH += 1
 
         if agent is None:

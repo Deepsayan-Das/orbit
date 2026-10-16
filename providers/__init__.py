@@ -1,4 +1,4 @@
-from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk, normalize_messages
+from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk, ToolCall, normalize_messages
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
 from .huggingface_provider import HuggingFaceProvider
@@ -12,6 +12,7 @@ __all__ = [
     "ChatMessage",
     "StreamChunk",
     "LLMResponse",
+    "ToolCall",
     "normalize_messages",
     "OllamaProvider",
     "OpenAIProvider",

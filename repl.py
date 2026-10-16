@@ -26,84 +26,14 @@ from rag.retrieval import build_context_prompt, retrieve
 import tools  # Ensures tool registration side-effects run (e.g. tools.filesystem)
 
 SYSTEM_PROMPT = (
-    "You are Orbit, a warm, enthusiastic, and joyful AI assistant for galactOS. "
-    "Be friendly, helpful, and concise while maintaining a clean, professional tone. "
-    "GalactOS companion CLI 'nova' is installed on the system. For container management, Kubernetes manifests, system health, "
-    "or toolchain installation, leverage 'nova' commands via shell execution: "
-    "1. Containers: 'nova container dockerfile', 'nova container compose', 'nova container build', 'nova container run', 'nova container ps', 'nova container stop', 'nova container logs'. "
-    "2. Kubernetes: 'nova cluster manifest'. "
-    "3. Development & Health: 'nova project doctor', 'nova install <tool>', 'nova system', 'nova init', 'nova version'. "
+    "You are Orbit, an intelligent AI software engineering assistant for the galactOS platform. "
+    "Be direct, helpful, and concise while maintaining a clean, professional tone. "
+    "Leverage available tools to inspect repository files, search codebase context, run tests, and execute commands. "
     "When a tool result is provided in the conversation, prioritize that tool output to directly answer the user's request."
 )
 
 
 EMBED_MODEL = "nomic-embed-text"
-
-
-def extract_tool_calls(raw_response: Any) -> list:
-    """Extract tool calls list from raw provider response object or dict."""
-    if not raw_response:
-        return []
-
-    # 1. Gemini GenAI SDK function_calls attribute
-    fn_calls = getattr(raw_response, "function_calls", None)
-    if fn_calls:
-        res = []
-        for fc in fn_calls:
-            name = getattr(fc, "name", "") or (fc.get("name") if isinstance(fc, dict) else "")
-            args = getattr(fc, "args", {}) or (fc.get("args") if isinstance(fc, dict) else {})
-            if isinstance(args, dict):
-                args_dict = dict(args)
-            else:
-                try:
-                    args_dict = dict(args)
-                except Exception:
-                    args_dict = {}
-            res.append({
-                "function": {
-                    "name": name,
-                    "arguments": args_dict
-                }
-            })
-        return res
-
-    # 2. OpenAI / Ollama standard tool calls format
-    if isinstance(raw_response, dict):
-        msg = raw_response.get("message", {})
-        if isinstance(msg, dict):
-            return msg.get("tool_calls") or []
-        return getattr(msg, "tool_calls", None) or []
-    else:
-        msg = getattr(raw_response, "message", None)
-        if msg:
-            if isinstance(msg, dict):
-                return msg.get("tool_calls") or []
-            return getattr(msg, "tool_calls", None) or []
-    return []
-
-
-def parse_tool_call(call: Any) -> tuple[str, dict]:
-    """Parse tool name and keyword arguments from a raw tool call item."""
-    if isinstance(call, dict):
-        fn = call.get("function", {})
-        if isinstance(fn, dict):
-            name = fn.get("name", "")
-            args = fn.get("arguments", {})
-            return name, args if isinstance(args, dict) else dict(args)
-        name = getattr(fn, "name", "")
-        args = getattr(fn, "arguments", {})
-        return name, args if isinstance(args, dict) else dict(args)
-    else:
-        fn = getattr(call, "function", None)
-        if fn:
-            if isinstance(fn, dict):
-                name = fn.get("name", "")
-                args = fn.get("arguments", {})
-                return name, args if isinstance(args, dict) else dict(args)
-            name = getattr(fn, "name", "")
-            args = getattr(fn, "arguments", {})
-            return name, args if isinstance(args, dict) else dict(args)
-    return "", {}
 
 
 def stream_reply(agent: OrbitLLM, messages, system_prompt: str) -> str:
@@ -136,7 +66,8 @@ def repl(
         max_steps=8,
     )
 
-    registered_tools = tools.get_tools_schema()
+    enabled_tools = config.tools.get("enabled", []) if isinstance(config.tools, dict) else []
+    registered_tools = tools.get_tools_schema(enabled_only=enabled_tools)
     tool_count = len(registered_tools)
     chunk_count = collection.count() if hasattr(collection, "count") else 0
 
@@ -194,21 +125,32 @@ def repl(
                     from ui import console
                     console.print(f"[dim][sources] Retrieved {len(top_chunks)} context chunks.[/dim]")
                     for i, chunk in enumerate(top_chunks, 1):
-                        src = chunk.metadata.get("source", "unknown") if hasattr(chunk, "metadata") and isinstance(chunk.metadata, dict) else "unknown"
+                        src = chunk.get("source", "unknown") if isinstance(chunk, dict) else getattr(chunk, "source", "unknown")
                         console.print(f"[dim]  Chunk {i}: {src}[/dim]")
                 except Exception:
                     print(f"[sources: retrieved {len(top_chunks)} chunks]")
 
-            grounded_prompt = build_context_prompt(user_input, top_chunks)
+            # Ephemeral repository context injection into turn system prompt (leaves chat history clean)
+            turn_system_prompt = SYSTEM_PROMPT
+            if top_chunks:
+                context_block = "\n\n---\n\n".join(
+                    f"# from {c.get('source', 'unknown')}\n{c.get('text', '')}"
+                    for c in top_chunks
+                )
+                turn_system_prompt = (
+                    f"{SYSTEM_PROMPT}\n\n"
+                    f"Repository context for this request:\n\n{context_block}\n\n"
+                    "Answer using this repository context when relevant. If the context does not contain the answer, rely on tools or general knowledge rather than guessing."
+                )
 
-            # Send: clean history + this turn's grounded prompt
-            current_turn_messages = session.history + [ChatMessage(role="user", content=grounded_prompt)]
+            # Send: clean history + this turn's raw user query
+            current_turn_messages = session.history + [ChatMessage(role="user", content=user_input)]
 
             # ── Agentic loop: multi-step tool chaining ────────────────
             result = run_agent_turn(
                 agent=session.agent,
                 messages=current_turn_messages,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=turn_system_prompt,
                 registered_tools=registered_tools,
                 max_steps=session.max_steps,
                 print_status=True,
@@ -264,7 +206,7 @@ if __name__ == "__main__":
     target = args.target
     path = Path(target)
 
-    collection = get_orbit_collection()
+    collection = get_orbit_collection(repo_path=target)
 
     print(f"[Orbit] Indexing target path '{target}' into persistent vector store...")
     try:

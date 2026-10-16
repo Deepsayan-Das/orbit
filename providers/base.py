@@ -4,19 +4,52 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class ToolCall:
+    """Represents a structured tool call returned by an LLM."""
+    id: str
+    name: str
+    args: Dict[str, Any]
+
+
+@dataclass
 class ChatMessage:
     """Represents a single message in a multi-turn conversation."""
     role: str  # "system", "user", "assistant", or "tool"
     content: str
     name: Optional[str] = None
     tool_calls: Optional[Any] = None
+    tool_call_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"role": self.role, "content": self.content or ""}
         if self.name is not None:
             d["name"] = self.name
         if self.tool_calls is not None:
-            d["tool_calls"] = self.tool_calls
+            formatted_tc = []
+            for tc in self.tool_calls:
+                if isinstance(tc, ToolCall):
+                    formatted_tc.append({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": tc.args}
+                    })
+                elif isinstance(tc, dict):
+                    formatted_tc.append(tc)
+                elif hasattr(tc, "function"):
+                    fn = getattr(tc, "function")
+                    fn_name = getattr(fn, "name", "")
+                    fn_args = getattr(fn, "arguments", {})
+                    tc_id = getattr(tc, "id", f"call_{fn_name}")
+                    formatted_tc.append({
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {"name": fn_name, "arguments": fn_args}
+                    })
+                else:
+                    formatted_tc.append(tc)
+            d["tool_calls"] = formatted_tc
+        if self.tool_call_id is not None:
+            d["tool_call_id"] = self.tool_call_id
         return d
 
 
@@ -34,8 +67,10 @@ class LLMResponse:
     """Represents a complete non-streamed LLM response."""
     content: str
     model: str
+    tool_calls: List[ToolCall] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     raw_response: Optional[Any] = None
+    usage: Optional[Dict[str, Any]] = None
 
     def __str__(self) -> str:
         return self.content
@@ -60,7 +95,8 @@ def normalize_messages(
             role=messages.get("role", "user"),
             content=messages.get("content", ""),
             name=messages.get("name"),
-            tool_calls=messages.get("tool_calls")
+            tool_calls=messages.get("tool_calls"),
+            tool_call_id=messages.get("tool_call_id"),
         ))
     elif isinstance(messages, list):
         for msg in messages:
@@ -71,7 +107,8 @@ def normalize_messages(
                     role=msg.get("role", "user"),
                     content=msg.get("content", ""),
                     name=msg.get("name"),
-                    tool_calls=msg.get("tool_calls")
+                    tool_calls=msg.get("tool_calls"),
+                    tool_call_id=msg.get("tool_call_id"),
                 ))
             elif isinstance(msg, str):
                 result.append(ChatMessage(role="user", content=msg))

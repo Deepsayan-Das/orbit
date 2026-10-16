@@ -22,7 +22,8 @@ def stub_tool_result(fn_name: str, content: str) -> str:
         return f"[read_file outcome for {path_hint}: {len(lines)} lines, main symbols: {symbol_hint} (may be outdated)]"
 
     elif fn_name == "run_tests":
-        failing = "none" if "OK" in clean or "PASSED" in clean else "failing tests detected"
+        clean_upper = clean.upper()
+        failing = "none" if ("OK" in clean_upper or "PASSED" in clean_upper) and "FAIL" not in clean_upper and "ERROR" not in clean_upper else "failing tests detected"
         reason = lines[0] if lines else "test run completed"
         return f"[run_tests outcome: failing tests: {failing}, reason: {reason}]"
 
@@ -33,7 +34,12 @@ def stub_tool_result(fn_name: str, content: str) -> str:
     elif fn_name == "run_shell_command":
         cmd_hint = "shell command"
         last_line = lines[-1] if lines else "ok"
-        return f"[run_shell_command outcome for {cmd_hint}: exit code 0/status ok, last lines: {last_line[:60]}]"
+        clean_lower = clean.lower()
+        if "error" in clean_lower or "failed" in clean_lower or "exit code 1" in clean_lower or "not recognized" in clean_lower:
+            status = "status error/nonzero exit"
+        else:
+            status = "exit code 0/status ok"
+        return f"[run_shell_command outcome for {cmd_hint}: {status}, last lines: {last_line[:60]}]"
 
     else:
         first_line = lines[0][:60] if lines else "completed"
@@ -47,7 +53,12 @@ def stub_middle_tool_results(messages: List[ChatMessage]) -> List[ChatMessage]:
         if isinstance(msg, ChatMessage) and msg.role == "tool":
             fn_name = msg.name or "tool"
             stub_content = stub_tool_result(fn_name, msg.content)
-            stubbed.append(ChatMessage(role="tool", content=stub_content, name=msg.name))
+            stubbed.append(ChatMessage(
+                role="tool",
+                content=stub_content,
+                name=msg.name,
+                tool_call_id=msg.tool_call_id,
+            ))
         else:
             stubbed.append(msg)
     return stubbed
@@ -95,11 +106,11 @@ def compact_history(
 
     Rules:
     1. Never touch: System prompt (index 0 if role='system') and 1st user message (role='user').
-    2. Keep recent N messages (default 6) unchanged.
+    2. Keep recent N messages (default 6) unchanged, ensuring no orphaned tool results.
     3. Tool Call Pairing Rule: Tool call assistant message + tool result message form an atomic pair.
     4. Replace old tool results with short outcome stubs.
     5. Summarize middle history if still above trigger; fallback to pair dropping if summary fails.
-    6. Retry limit: max 2 retries.
+    6. Retry limit: max 2 retries, plus bounded pair dropping until below threshold.
     """
     if not history:
         return history
@@ -116,9 +127,17 @@ def compact_history(
     if len(history) <= protected_count + recent_count:
         return history
 
+    # Adjust recent_split boundary to never split inside an atomic tool call/result group
+    recent_idx = len(history) - recent_count
+    while recent_idx > protected_count and history[recent_idx].role == "tool":
+        recent_idx -= 1
+
+    if recent_idx <= protected_count:
+        return history
+
     protected_prefix = history[:protected_count]
-    recent_suffix = history[-recent_count:]
-    middle = history[protected_count:-recent_count]
+    recent_suffix = history[recent_idx:]
+    middle = history[protected_count:recent_idx]
 
     if not middle:
         return history
@@ -144,7 +163,14 @@ def compact_history(
                 for m in stubbed_middle:
                     role_str = m.role.upper() if isinstance(m, ChatMessage) else "MSG"
                     content_str = m.content if isinstance(m, ChatMessage) else str(m)
+                    # Bound individual message string length for summarizer safety
+                    if len(content_str) > 2000:
+                        content_str = content_str[:1000] + "... [truncated] ..." + content_str[-500:]
                     middle_text.append(f"[{role_str}]: {content_str}")
+
+                joined_middle = "\n".join(middle_text)
+                if len(joined_middle) > 8000:
+                    joined_middle = joined_middle[:4000] + "\n... [intermediate history truncated] ...\n" + joined_middle[-4000:]
 
                 prompt = (
                     "Summarize the preceding conversation middle history into a concise summary.\n"
@@ -153,7 +179,7 @@ def compact_history(
                 if focus:
                     prompt += f"\nFocus specifically on: {focus}"
 
-                summary_turn = [ChatMessage(role="user", content="\n".join(middle_text) + "\n\n" + prompt)]
+                summary_turn = [ChatMessage(role="user", content=joined_middle + "\n\n" + prompt)]
                 resp = agent.chat(messages=summary_turn, stream=False)
                 summary_content = getattr(resp, "content", str(resp)).strip()
 
@@ -169,6 +195,13 @@ def compact_history(
         # Step 3: Fallback — drop oldest tool pair if summary failed or still above trigger
         if not summary_succeeded or should_compact(estimate_tokens(candidate), window):
             middle = drop_oldest_tool_pairs(middle)
+            stubbed_middle = stub_middle_tool_results(middle)
             candidate = protected_prefix + stubbed_middle + recent_suffix
+
+    # If still above limit after retries, drop remaining middle tool pairs
+    while middle and should_compact(estimate_tokens(candidate), window):
+        middle = drop_oldest_tool_pairs(middle)
+        stubbed_middle = stub_middle_tool_results(middle)
+        candidate = protected_prefix + stubbed_middle + recent_suffix
 
     return candidate

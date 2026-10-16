@@ -11,7 +11,7 @@ import ast
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # Tree-sitter imports & language binding setup
 import tree_sitter
@@ -68,48 +68,160 @@ except ImportError:
     pass
 
 
+_PARSER_CACHE: Dict[str, Any] = {}
+
+def get_treesitter_parser(ext: str) -> Optional[Any]:
+    """Retrieve or cache a reusable tree_sitter.Parser instance per language."""
+    ext_clean = ext.lower()
+    lang = TREE_SITTER_LANGUAGES.get(ext_clean)
+    if not lang:
+        return None
+    if ext_clean not in _PARSER_CACHE:
+        _PARSER_CACHE[ext_clean] = tree_sitter.Parser(lang)
+    return _PARSER_CACHE[ext_clean]
+
+
 # --------------------------------------------------------------------------
 # Python AST Chunking
 # --------------------------------------------------------------------------
 
-def chunk_python_file(source: str, max_chunk_size: int = 1500) -> List[str]:
-    """Split a Python source file into complete, semantically whole units
-    (functions, classes). Classes larger than max_chunk_size are split
-    per-method, with the class name/docstring prepended so each method
-    chunk stays self-contained."""
+def chunk_python_file(
+    source: str, 
+    max_chunk_size: int = 1500,
+    return_dicts: bool = False
+) -> List[Any]:
+    """Split a Python source file into semantically whole units (preamble, functions, classes).
+    Includes decorators, captures module-level preambles, and splits oversized functions."""
     try:
         tree = ast.parse(source)
     except Exception:
         return []
 
-    chunks: List[str] = []
+    lines = source.splitlines()
+    total_lines = len(lines)
+    chunks: List[Dict[str, Any]] = []
+    covered_line_indices = set()
 
     for node in ast.iter_child_nodes(tree):
         if not isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)):
             continue
 
-        segment = ast.get_source_segment(source, node)
-        if not segment:
+        # Include all decorators preceding the definition
+        start_line = node.decorator_list[0].lineno if getattr(node, "decorator_list", None) else node.lineno
+        end_line = getattr(node, "end_lineno", node.lineno)
+
+        for lno in range(start_line, end_line + 1):
+            covered_line_indices.add(lno)
+
+        segment = "\n".join(lines[start_line - 1 : end_line])
+        if not segment.strip():
             continue
 
-        if len(segment) <= max_chunk_size or not isinstance(node, ast.ClassDef):
-            chunks.append(segment)
-            continue
+        if isinstance(node, ast.ClassDef):
+            if len(segment) <= max_chunk_size:
+                chunks.append({
+                    "text": segment,
+                    "kind": "class",
+                    "symbol": node.name,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                })
+            else:
+                # Class too big — split per-method with class header context
+                class_header = f"class {node.name}:\n"
+                docstring = ast.get_docstring(node)
+                if docstring:
+                    class_header += f'    """{docstring}"""\n'
 
-        # Class too big — split per-method, but keep class context attached
-        # so a retrieved method chunk still says which class it belongs to.
-        class_header = f"class {node.name}:\n"
-        docstring = ast.get_docstring(node)
-        if docstring:
-            class_header += f'    """{docstring}"""\n'
+                method_found = False
+                for sub_node in node.body:
+                    if isinstance(sub_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        sub_start = sub_node.decorator_list[0].lineno if getattr(sub_node, "decorator_list", None) else sub_node.lineno
+                        sub_end = getattr(sub_node, "end_lineno", sub_node.lineno)
+                        sub_segment = "\n".join(lines[sub_start - 1 : sub_end])
+                        if sub_segment.strip():
+                            chunks.append({
+                                "text": f"{class_header}\n{sub_segment}",
+                                "kind": "method",
+                                "symbol": f"{node.name}.{sub_node.name}",
+                                "start_line": sub_start,
+                                "end_line": sub_end,
+                            })
+                            method_found = True
+                if not method_found:
+                    chunks.append({
+                        "text": segment,
+                        "kind": "class",
+                        "symbol": node.name,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                    })
+        else:
+            # Function or AsyncFunction
+            if len(segment) <= max_chunk_size:
+                chunks.append({
+                    "text": segment,
+                    "kind": "function",
+                    "symbol": node.name,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                })
+            else:
+                # Split large functions with signature header preserved
+                first_line = segment.splitlines()[0] if segment.splitlines() else f"def {node.name}(...):"
+                fn_header = f"# in function {node.name}:\n{first_line}\n"
+                body_lines = segment.splitlines()[1:]
+                step = 30
+                overlap = 5
+                for i in range(0, len(body_lines), step - overlap):
+                    window = body_lines[i : i + step]
+                    if not window:
+                        break
+                    piece_text = fn_header + "\n".join(window)
+                    chunks.append({
+                        "text": piece_text,
+                        "kind": "function",
+                        "symbol": node.name,
+                        "start_line": start_line + i,
+                        "end_line": min(end_line, start_line + i + len(window)),
+                    })
 
-        for sub_node in node.body:
-            if isinstance(sub_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                method_source = ast.get_source_segment(source, sub_node)
-                if method_source:
-                    chunks.append(f"{class_header}\n{method_source}")
+    # Module preamble: gather top-level statements outside def/class (imports, constants, registries)
+    preamble_lines = []
+    preamble_start = None
+    for idx, line in enumerate(lines, 1):
+        if idx not in covered_line_indices:
+            if preamble_start is None:
+                preamble_start = idx
+            preamble_lines.append(line)
+        else:
+            if preamble_lines and any(l.strip() and not l.strip().startswith("#") for l in preamble_lines):
+                p_text = "\n".join(preamble_lines).strip()
+                if len(p_text) > 40:
+                    chunks.insert(0, {
+                        "text": p_text,
+                        "kind": "preamble",
+                        "symbol": "module_preamble",
+                        "start_line": preamble_start,
+                        "end_line": idx - 1,
+                    })
+            preamble_lines = []
+            preamble_start = None
 
-    return chunks
+    if preamble_lines and any(l.strip() and not l.strip().startswith("#") for l in preamble_lines):
+        p_text = "\n".join(preamble_lines).strip()
+        if len(p_text) > 40:
+            chunks.append({
+                "text": p_text,
+                "kind": "preamble",
+                "symbol": "module_preamble",
+                "start_line": preamble_start or 1,
+                "end_line": total_lines,
+            })
+
+    if return_dicts:
+        return chunks
+    return [c["text"] for c in chunks]
 
 
 # --------------------------------------------------------------------------
@@ -137,44 +249,101 @@ def _get_node_name(node, source_bytes: bytes) -> Optional[str]:
     return None
 
 
-def chunk_with_treesitter(source: str, ext: str, max_chunk_size: int = 1500) -> List[Dict[str, str]]:
-    """Parse source code with tree-sitter and extract complete top-level functions,
-    classes, or structs. If a class/struct exceeds max_chunk_size, split per-method
-    with parent header attached."""
-    lang = TREE_SITTER_LANGUAGES.get(ext.lower())
-    if not lang:
+def chunk_with_treesitter(source: str, ext: str, max_chunk_size: int = 1500) -> List[Dict[str, Any]]:
+    """Parse source code with cached tree-sitter parser and extract functions, classes,
+    unwrapping export statements, arrow function declarations, and structs."""
+    parser = get_treesitter_parser(ext)
+    if not parser:
         return chunk_fallback(source, filepath=ext)
 
-    parser = tree_sitter.Parser(lang)
     source_bytes = source.encode("utf-8")
     tree = parser.parse(source_bytes)
     root = tree.root_node
 
-    chunks: List[Dict[str, str]] = []
+    chunks: List[Dict[str, Any]] = []
 
     for node in root.children:
+        target_node = node
         node_type = node.type
-        node_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace").strip()
 
+        # Unwrap export statements (e.g. export function ..., export class ..., export const ... = () => {})
+        if node_type == "export_statement":
+            for ch in node.children:
+                if ch.type in FUNCTION_NODE_TYPES or ch.type in CLASS_NODE_TYPES or ch.type in ("lexical_declaration", "variable_declaration"):
+                    target_node = ch
+                    node_type = ch.type
+                    break
+
+        node_text = source_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace").strip()
         if not node_text:
             continue
 
+        start_line = node.start_point[0] + 1
+        end_line = node.end_point[0] + 1
+
         if node_type in FUNCTION_NODE_TYPES:
-            chunks.append({"text": node_text, "kind": "function"})
+            fn_name = _get_node_name(target_node, source_bytes) or "function"
+            chunks.append({
+                "text": node_text,
+                "kind": "function",
+                "symbol": fn_name,
+                "start_line": start_line,
+                "end_line": end_line,
+            })
+
+        elif node_type in ("lexical_declaration", "variable_declaration"):
+            # Check for arrow functions: const foo = () => { ... }
+            arrow_found = False
+            for ch in target_node.children:
+                if ch.type == "variable_declarator":
+                    var_name = _get_node_name(ch, source_bytes)
+                    for sub in ch.children:
+                        if sub.type in ("arrow_function", "function_expression"):
+                            chunks.append({
+                                "text": node_text,
+                                "kind": "function",
+                                "symbol": var_name or "arrow_func",
+                                "start_line": start_line,
+                                "end_line": end_line,
+                            })
+                            arrow_found = True
+                            break
+            if not arrow_found and len(node_text) > 30:
+                chunks.append({
+                    "text": node_text,
+                    "kind": "preamble",
+                    "symbol": "declaration",
+                    "start_line": start_line,
+                    "end_line": end_line,
+                })
+
+        elif node_type in ("const_declaration", "var_declaration"):
+            # Go top-level const/var blocks
+            chunks.append({
+                "text": node_text,
+                "kind": "preamble",
+                "symbol": "module_constants",
+                "start_line": start_line,
+                "end_line": end_line,
+            })
 
         elif node_type in CLASS_NODE_TYPES:
+            class_name = _get_node_name(target_node, source_bytes) or "Container"
             if len(node_text) <= max_chunk_size:
-                chunks.append({"text": node_text, "kind": "class"})
+                chunks.append({
+                    "text": node_text,
+                    "kind": "class",
+                    "symbol": class_name,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                })
             else:
-                # Class/struct too big: split members with parent context
-                node_name = _get_node_name(node, source_bytes) or "Container"
-                header_line = node_text.splitlines()[0] if node_text.splitlines() else f"{node_type} {node_name}"
+                header_line = node_text.splitlines()[0] if node_text.splitlines() else f"{node_type} {class_name}"
                 parent_context = f"{header_line}\n"
 
                 member_found = False
-                # Inspect children for methods/functions
-                body_node = node
-                for child in node.children:
+                body_node = target_node
+                for child in target_node.children:
                     if child.type in ("class_body", "declaration_list", "field_declaration_list", "interface_body"):
                         body_node = child
                         break
@@ -182,18 +351,27 @@ def chunk_with_treesitter(source: str, ext: str, max_chunk_size: int = 1500) -> 
                 for child in body_node.children:
                     if child.type in FUNCTION_NODE_TYPES or child.type in ("method_definition", "method_declaration", "field_declaration"):
                         member_text = source_bytes[child.start_byte:child.end_byte].decode("utf-8", errors="replace").strip()
+                        member_name = _get_node_name(child, source_bytes) or "method"
                         if member_text:
                             chunks.append({
                                 "text": f"{parent_context}    {member_text}",
-                                "kind": "method"
+                                "kind": "method",
+                                "symbol": f"{class_name}.{member_name}",
+                                "start_line": child.start_point[0] + 1,
+                                "end_line": child.end_point[0] + 1,
                             })
                             member_found = True
 
                 if not member_found:
-                    chunks.append({"text": node_text, "kind": "class"})
+                    chunks.append({
+                        "text": node_text,
+                        "kind": "class",
+                        "symbol": class_name,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                    })
 
     if not chunks and source.strip():
-        # Fallback if no top-level functions/classes detected in tree-sitter AST
         return chunk_fallback(source, filepath=f"source{ext}")
 
     return chunks
@@ -265,22 +443,12 @@ PROSE_EXTENSIONS = {".md", ".txt", ".rst"}
 CODE_EXTENSIONS = {".go", ".js", ".jsx", ".ts", ".tsx", ".rs", ".java", ".c", ".cpp", ".hpp", ".h", ".cc"}
 
 
-def chunk_file(filepath: str, source: str) -> List[Dict[str, str]]:
+def chunk_file(filepath: str, source: str) -> List[Dict[str, Any]]:
     """Dispatcher routing files by extension to Python AST, Tree-Sitter AST, Prose, or Fallback."""
     ext = Path(filepath).suffix.lower()
 
     if ext == ".py":
-        raw_chunks = chunk_python_file(source)
-        result: List[Dict[str, str]] = []
-        for c in raw_chunks:
-            if c.startswith("class ") and "\n    def " in c and len(c) > 1500:
-                kind = "method"
-            elif c.startswith("class "):
-                kind = "class"
-            else:
-                kind = "function"
-            result.append({"text": c, "kind": kind})
-        return result
+        return chunk_python_file(source, return_dicts=True)
 
     elif ext in CODE_EXTENSIONS:
         return chunk_with_treesitter(source, ext)
@@ -377,22 +545,25 @@ def extract_symbols(filepath: str, source: str) -> List[str]:
             pass
 
     elif ext in CODE_EXTENSIONS:
-        lang = TREE_SITTER_LANGUAGES.get(ext)
-        if lang:
+        parser = get_treesitter_parser(ext)
+        if parser:
             try:
-                parser = tree_sitter.Parser(lang)
                 source_bytes = source.encode("utf-8")
                 tree = parser.parse(source_bytes)
-
-                def _visit(node):
-                    if node.type in FUNCTION_NODE_TYPES or node.type in CLASS_NODE_TYPES:
-                        name = _get_node_name(node, source_bytes)
+                stack = [tree.root_node]
+                while stack:
+                    curr = stack.pop()
+                    if curr.type in FUNCTION_NODE_TYPES or curr.type in CLASS_NODE_TYPES:
+                        name = _get_node_name(curr, source_bytes)
                         if name and name not in symbols:
                             symbols.append(name)
-                    for child in node.children:
-                        _visit(child)
-
-                _visit(tree.root_node)
+                    elif curr.type == "variable_declarator":
+                        for sub in curr.children:
+                            if sub.type in ("arrow_function", "function_expression"):
+                                name = _get_node_name(curr, source_bytes)
+                                if name and name not in symbols:
+                                    symbols.append(name)
+                    stack.extend(reversed(curr.children))
             except Exception:
                 pass
 

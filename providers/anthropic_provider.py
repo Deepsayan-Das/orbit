@@ -7,7 +7,7 @@ try:
 except ImportError:
     Anthropic = None
 
-from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk
+from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk, ToolCall
 
 load_dotenv()
 
@@ -42,7 +42,10 @@ class AnthropicProvider(BaseLLMProvider):
         **kwargs: Any
     ) -> Union[LLMResponse, Iterator[StreamChunk]]:
         raw_tools = kwargs.pop("tools", None)
+        sys_kw = kwargs.pop("system_prompt", None)
         formatted_messages, system_prompt = self._format_messages(messages)
+        if sys_kw:
+            system_prompt = f"{sys_kw}\n\n{system_prompt}" if system_prompt else sys_kw
         anthropic_tools = self._format_tools(raw_tools) if raw_tools else None
 
         if stream:
@@ -54,21 +57,63 @@ class AnthropicProvider(BaseLLMProvider):
         formatted: List[Dict[str, Any]] = []
         system_parts: List[str] = []
 
-        for msg in messages:
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
             if msg.role == "system":
                 system_parts.append(msg.content)
+                i += 1
             elif msg.role == "tool":
-                tool_name = msg.name or "tool"
+                # Group consecutive tool outputs into a single user message with tool_result blocks
+                tool_results = []
+                while i < len(messages) and messages[i].role == "tool":
+                    tmsg = messages[i]
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tmsg.tool_call_id or f"call_{tmsg.name or 'default'}",
+                        "content": str(tmsg.content or ""),
+                    })
+                    i += 1
                 formatted.append({
                     "role": "user",
-                    "content": f"[Tool Output for '{tool_name}']:\n{msg.content}"
+                    "content": tool_results,
                 })
+            elif msg.role in ("assistant", "model"):
+                if msg.tool_calls:
+                    content_blocks: List[Dict[str, Any]] = []
+                    if msg.content:
+                        content_blocks.append({"type": "text", "text": msg.content})
+                    for tc in msg.tool_calls:
+                        if isinstance(tc, ToolCall):
+                            content_blocks.append({
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": tc.args,
+                            })
+                        elif isinstance(tc, dict):
+                            fn = tc.get("function", {})
+                            content_blocks.append({
+                                "type": "tool_use",
+                                "id": tc.get("id", f"call_{fn.get('name', 'default')}"),
+                                "name": fn.get("name", ""),
+                                "input": fn.get("arguments", {}),
+                            })
+                        elif hasattr(tc, "function"):
+                            fn = getattr(tc, "function")
+                            content_blocks.append({
+                                "type": "tool_use",
+                                "id": getattr(tc, "id", f"call_{getattr(fn, 'name', 'default')}"),
+                                "name": getattr(fn, "name", ""),
+                                "input": getattr(fn, "arguments", {}),
+                            })
+                    formatted.append({"role": "assistant", "content": content_blocks})
+                else:
+                    formatted.append({"role": "assistant", "content": msg.content or ""})
+                i += 1
             else:
-                role = "assistant" if msg.role in ("assistant", "model") else "user"
-                content = msg.content or ""
-                if not content and role == "assistant":
-                    content = "[Executing tools...]"
-                formatted.append({"role": role, "content": content})
+                formatted.append({"role": "user", "content": msg.content or ""})
+                i += 1
 
         system_prompt = "\n\n".join(system_parts) if system_parts else None
         return formatted, system_prompt
@@ -106,26 +151,62 @@ class AnthropicProvider(BaseLLMProvider):
             "max_tokens": max_tokens,
         }
         if system_prompt:
-            call_kwargs["system"] = system_prompt
+            if isinstance(system_prompt, str):
+                call_kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+            else:
+                call_kwargs["system"] = system_prompt
+
         if tools:
-            call_kwargs["tools"] = tools
+            cached_tools = [dict(t) for t in tools]
+            if cached_tools:
+                cached_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            call_kwargs["tools"] = cached_tools
 
         call_kwargs.update(kwargs)
 
         response = self.client.messages.create(**call_kwargs)
 
         content_parts = []
+        tool_calls: List[ToolCall] = []
         for block in getattr(response, "content", []):
-            if getattr(block, "type", None) == "text":
+            block_type = getattr(block, "type", None)
+            if block_type == "text":
                 content_parts.append(getattr(block, "text", ""))
+            elif block_type == "tool_use":
+                tool_calls.append(
+                    ToolCall(
+                        id=getattr(block, "id", ""),
+                        name=getattr(block, "name", ""),
+                        args=getattr(block, "input", {}) or {},
+                    )
+                )
 
         content = "".join(content_parts)
+
+        usage_dict = {}
+        raw_usage = getattr(response, "usage", None)
+        if raw_usage:
+            usage_dict = {
+                "prompt_tokens": getattr(raw_usage, "input_tokens", 0),
+                "completion_tokens": getattr(raw_usage, "output_tokens", 0),
+                "total_tokens": getattr(raw_usage, "input_tokens", 0) + getattr(raw_usage, "output_tokens", 0),
+                "cache_creation_input_tokens": getattr(raw_usage, "cache_creation_input_tokens", 0),
+                "cache_read_input_tokens": getattr(raw_usage, "cache_read_input_tokens", 0),
+            }
 
         return LLMResponse(
             content=content,
             model=self.model,
-            metadata={"usage": getattr(response, "usage", None)},
+            tool_calls=tool_calls,
+            metadata={"usage": usage_dict or raw_usage},
             raw_response=response,
+            usage=usage_dict or None,
         )
 
     def _stream_chat(
@@ -143,9 +224,22 @@ class AnthropicProvider(BaseLLMProvider):
             "max_tokens": max_tokens,
         }
         if system_prompt:
-            call_kwargs["system"] = system_prompt
+            if isinstance(system_prompt, str):
+                call_kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+            else:
+                call_kwargs["system"] = system_prompt
+
         if tools:
-            call_kwargs["tools"] = tools
+            cached_tools = [dict(t) for t in tools]
+            if cached_tools:
+                cached_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            call_kwargs["tools"] = cached_tools
 
         call_kwargs.update(kwargs)
 

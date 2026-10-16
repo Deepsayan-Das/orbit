@@ -1,7 +1,7 @@
 from typing import Any, Dict, Iterator, List, Optional, Union
 import ollama
 
-from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk
+from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk, ToolCall
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -27,6 +27,8 @@ class OllamaProvider(BaseLLMProvider):
         options = dict(kw.get("options", {}) or {})
         if self.num_ctx is not None and "num_ctx" not in options:
             options["num_ctx"] = self.num_ctx
+        if "temperature" in kw and "temperature" not in options:
+            options["temperature"] = kw.pop("temperature")
         if options:
             kw["options"] = options
         return kw
@@ -56,14 +58,46 @@ class OllamaProvider(BaseLLMProvider):
         msg_obj = raw_resp.get("message", {}) if isinstance(raw_resp, dict) else getattr(raw_resp, "message", {})
         content = msg_obj.get("content", "") if isinstance(msg_obj, dict) else getattr(msg_obj, "content", "")
 
+        tool_calls: List[ToolCall] = []
+        raw_tcs = msg_obj.get("tool_calls") if isinstance(msg_obj, dict) else getattr(msg_obj, "tool_calls", None)
+        if raw_tcs:
+            for idx, tc in enumerate(raw_tcs):
+                fn = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", None)
+                fn_name = fn.get("name", "") if isinstance(fn, dict) else getattr(fn, "name", "")
+                fn_args = fn.get("arguments", {}) if isinstance(fn, dict) else getattr(fn, "arguments", {})
+                if isinstance(fn_args, str):
+                    import json
+                    try:
+                        fn_args = json.loads(fn_args)
+                    except Exception:
+                        fn_args = {}
+                tc_id = tc.get("id", f"call_{idx}_{fn_name}") if isinstance(tc, dict) else getattr(tc, "id", f"call_{idx}_{fn_name}")
+                tool_calls.append(ToolCall(id=tc_id, name=fn_name, args=dict(fn_args) if isinstance(fn_args, dict) else {}))
+
+        usage = {}
+        if isinstance(raw_resp, dict):
+            if "prompt_eval_count" in raw_resp:
+                usage["prompt_tokens"] = raw_resp["prompt_eval_count"]
+            if "eval_count" in raw_resp:
+                usage["completion_tokens"] = raw_resp["eval_count"]
+            if "prompt_tokens" in usage and "completion_tokens" in usage:
+                usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        elif hasattr(raw_resp, "prompt_eval_count"):
+            usage["prompt_tokens"] = getattr(raw_resp, "prompt_eval_count", 0)
+            usage["completion_tokens"] = getattr(raw_resp, "eval_count", 0)
+            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+
         return LLMResponse(
             content=content,
             model=self.model,
+            tool_calls=tool_calls,
             metadata={
                 "done": raw_resp.get("done") if isinstance(raw_resp, dict) else getattr(raw_resp, "done", None),
                 "created_at": raw_resp.get("created_at") if isinstance(raw_resp, dict) else getattr(raw_resp, "created_at", None),
+                "usage": usage or None,
             },
             raw_response=raw_resp,
+            usage=usage or None,
         )
 
     def _stream_chat(self, messages: List[Dict[str, str]], **kwargs: Any) -> Iterator[StreamChunk]:

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk
+from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk, ToolCall
 
 load_dotenv()
 
@@ -52,24 +52,42 @@ class GeminiProvider(BaseLLMProvider):
                 system_instructions.append(msg.content)
             elif msg.role == "tool":
                 tool_name = msg.name or "tool"
-                text = f"[Tool Output for '{tool_name}']:\n{msg.content}"
-                contents.append(
-                    types.Content(
-                        role="user",
-                        parts=[types.Part.from_text(text=text)]
+                try:
+                    part = types.Part.from_function_response(
+                        name=tool_name,
+                        response={"result": msg.content or ""}
                     )
-                )
+                    contents.append(types.Content(role="user", parts=[part]))
+                except Exception:
+                    text = f"[Tool Output for '{tool_name}']:\n{msg.content}"
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(text=text)]
+                        )
+                    )
             else:
-                role = "model" if msg.role == "assistant" else "user"
-                text = msg.content or ""
-                if not text and msg.role == "assistant":
-                    text = "[Executing tools...]"
-                contents.append(
-                    types.Content(
-                        role=role,
-                        parts=[types.Part.from_text(text=text)]
-                    )
-                )
+                role = "model" if msg.role in ("assistant", "model") else "user"
+                parts = []
+                if msg.content:
+                    parts.append(types.Part.from_text(text=msg.content))
+                if msg.role in ("assistant", "model") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        tc_name = getattr(tc, "name", "") if hasattr(tc, "name") else tc.get("function", {}).get("name", "")
+                        tc_args = getattr(tc, "args", {}) if hasattr(tc, "args") else tc.get("function", {}).get("arguments", {})
+                        if isinstance(tc_args, str):
+                            import json
+                            try:
+                                tc_args = json.loads(tc_args)
+                            except Exception:
+                                tc_args = {}
+                        try:
+                            parts.append(types.Part.from_function_call(name=tc_name, args=tc_args))
+                        except Exception:
+                            pass
+                if not parts:
+                    parts.append(types.Part.from_text(text=""))
+                contents.append(types.Content(role=role, parts=parts))
 
         tools_param = None
         if raw_tools:
@@ -117,13 +135,35 @@ class GeminiProvider(BaseLLMProvider):
             config=config,
             **kwargs
         )
-        content = response.text or ""
+        try:
+            content = response.text or ""
+        except Exception:
+            content = ""
+
+        tool_calls: List[ToolCall] = []
+        raw_fcs = getattr(response, "function_calls", None)
+        if raw_fcs:
+            for idx, fc in enumerate(raw_fcs):
+                fc_name = getattr(fc, "name", "") or (fc.get("name") if isinstance(fc, dict) else "")
+                fc_args = getattr(fc, "args", {}) or (fc.get("args") if isinstance(fc, dict) else {})
+                tool_calls.append(ToolCall(id=f"call_{idx}_{fc_name}", name=fc_name, args=dict(fc_args) if isinstance(fc_args, dict) else {}))
+
+        usage_dict = {}
+        um = getattr(response, "usage_metadata", None)
+        if um:
+            usage_dict = {
+                "prompt_tokens": getattr(um, "prompt_token_count", 0),
+                "completion_tokens": getattr(um, "candidates_token_count", 0),
+                "total_tokens": getattr(um, "total_token_count", 0),
+            }
 
         return LLMResponse(
             content=content,
             model=self.model,
-            metadata={},
+            tool_calls=tool_calls,
+            metadata={"usage": usage_dict},
             raw_response=response,
+            usage=usage_dict or None,
         )
 
     def _stream_chat(

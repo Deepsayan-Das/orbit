@@ -12,13 +12,19 @@ from .registry import ToolRiskLevel, register_tool
 
 RUN_SHELL_COMMAND_SCHEMA: Dict[str, Any] = {
     "name": "run_shell_command",
-    "description": "Execute a shell command on the host system. For Git tasks (commit, push, diff, status), use dedicated git_commit, git_push, git_status, git_diff tools instead.",
+    "description": (
+        "Execute a shell command on the host system. Supports standard shell commands as well as "
+        "the GalactOS companion CLI 'nova' for containers ('nova container dockerfile/compose/build/run/ps/stop/logs'), "
+        "Kubernetes manifests ('nova cluster manifest'), toolchain installation ('nova install <tool>'), "
+        "and system diagnostics ('nova project doctor', 'nova system'). "
+        "For Git tasks (commit, push, diff, status), use dedicated git_commit, git_push, git_status, git_diff tools."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
             "command": {
                 "type": "string",
-                "description": "The shell command string to execute (e.g. 'python --version', 'dir')."
+                "description": "The shell command string to execute (e.g. 'python --version', 'nova project doctor', 'dir')."
             }
         },
         "required": ["command"]

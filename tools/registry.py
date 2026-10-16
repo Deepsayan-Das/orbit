@@ -80,13 +80,16 @@ def get_tool(name: str) -> Optional[Dict[str, Any]]:
     return _TOOL_REGISTRY.get(name)
 
 
-def get_tools_schema() -> List[Dict[str, Any]]:
+def get_tools_schema(enabled_only: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
-    Return the full list of tool definitions in OpenAI/Ollama function-calling format
+    Return the list of tool definitions in OpenAI/Ollama function-calling format
     ready to pass into LLM provider chat() calls (e.g. tools=[...]).
+    If enabled_only is provided and non-empty, only includes tools listed in enabled_only.
     """
     schemas = []
-    for tool_info in _TOOL_REGISTRY.values():
+    for tool_name, tool_info in _TOOL_REGISTRY.items():
+        if enabled_only and tool_name not in enabled_only:
+            continue
         schemas.append({
             "type": "function",
             "function": tool_info["schema"]

@@ -19,8 +19,27 @@ def estimate_tokens(messages: Union[List[ChatMessage], LLMResponse, Any]) -> int
     if isinstance(messages, LLMResponse):
         # 1. Check direct usage field if present
         usage = getattr(messages, "usage", None) or messages.metadata.get("usage")
+        if not usage and isinstance(messages.raw_response, dict):
+            # Check Ollama prompt_eval_count directly
+            if "prompt_eval_count" in messages.raw_response:
+                return int(messages.raw_response["prompt_eval_count"])
+            usage = messages.raw_response.get("usage")
+        elif not usage and hasattr(messages.raw_response, "usage_metadata"):
+            # Check Gemini usage_metadata directly
+            um = messages.raw_response.usage_metadata
+            if hasattr(um, "prompt_token_count") and getattr(um, "prompt_token_count") is not None:
+                return int(getattr(um, "prompt_token_count"))
+            elif isinstance(um, dict) and "prompt_token_count" in um:
+                return int(um["prompt_token_count"])
+
         if isinstance(usage, dict):
-            prompt_t = usage.get("prompt_tokens") or usage.get("input_tokens") or usage.get("total_tokens")
+            prompt_t = (
+                usage.get("prompt_tokens")
+                or usage.get("input_tokens")
+                or usage.get("prompt_eval_count")
+                or usage.get("prompt_token_count")
+                or usage.get("total_tokens")
+            )
             if prompt_t is not None:
                 return int(prompt_t)
         elif isinstance(usage, int):
