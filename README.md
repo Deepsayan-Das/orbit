@@ -1,65 +1,71 @@
 # Orbit
 
-Orbit is the AI assistant layer for **GalactOS** — a provider-agnostic LLM
-runtime plus a raw, from-scratch RAG (retrieval-augmented generation)
-pipeline, multi-step agentic loop, context compaction subsystem, sub-agent delegation engine, and tool registry system that lets Orbit answer questions grounded
-in a real codebase and perform tool-assisted actions safely.
+Orbit is the AI assistant layer for **GalactOS** — a provider-agnostic LLM runtime coupled with a high-performance Hybrid RAG (retrieval-augmented generation) pipeline, multi-step ReAct agentic loop, automated context compaction engine, isolated sub-agent delegation, and a risk-tiered tool registry.
 
-Orbit works natively with GalactOS and its companion tool **Nova** (`nova container`, `nova project doctor`, `nova system`), with Podman-native container execution.
+Orbit works natively with GalactOS and its companion tool **Nova** (`nova container`, `nova project doctor`, `nova cluster`, `nova system`), featuring Podman-native container execution and shell safety allowlisting.
 
-No heavy AI orchestration frameworks — every component (AST chunking, ChromaDB
-vector indexing, retrieval, symbol typo correction, multi-step tool chaining, slash commands, context compaction, sub-agents) is built directly so the mechanics are fully understood and maintainable. See [docs/ARCHITECTURE.md](file:///d:/web%20development%20projects/ongoing/orbit/docs/ARCHITECTURE.md)
-for the complete design breakdown.
+Built from scratch without bloated orchestration frameworks — every component (AST & Tree-Sitter chunking, BM25 + dense vector hybrid retrieval, ChromaDB persistent indexing, symbol typo correction, multi-provider tool calling, context compaction, and sub-agents) is implemented directly for complete transparency, speed, and maintainability. See [docs/ARCHITECTURE.md](file:///d:/web%20development%20projects/ongoing/orbit/docs/ARCHITECTURE.md) for detailed architectural specifications.
 
-## What's in here
+---
+
+## What's in Here
 
 ```text
-providers/             # LLM Provider abstraction layer
-  base.py              # BaseLLMProvider (ABC), ChatMessage, LLMResponse, StreamChunk
-  ollama_provider.py   # Ollama local model integration (with num_ctx context window options)
-  openai_provider.py   # OpenAI Cloud API
-  huggingface_provider.py # HuggingFace Inference API
-  gemini_provider.py   # Google Gemini API
-  groq_provider.py     # Groq LPU API
-llm_client.py          # OrbitLLM — provider-agnostic facade/factory
-config.py              # OrbitConfig dataclass (with context_windows model map) & ~/.orbit/config.yaml
-configure.py           # Interactive configuration wizard (with Ollama num_ctx VRAM prompts)
-agent_loop.py          # ReAct multi-step agentic tool chaining orchestrator with streaming
-agent_sub.py           # Isolated sub-agent execution engine & delegate_task tool
-context/               # Context Management Subsystem
-  window.py            # Window resolver (model context table lookup, user config, 4096 fallback)
-  measure.py           # Token estimator (reported LLMResponse usage or chars/4) & 75%/reserve trigger
-ui.py                  # Rich terminal UI, markdown rendering, and diff colorization
-commands/              # Slash command system
-  session.py           # Session dataclass holding agent, config, history, and REPL state
-  registry.py          # Command registry, @command decorator, and exception-safe dispatch
-  builtin.py           # Handlers for /help, /status, /model, /provider, /config, /tools, etc.
-  compaction.py        # Compaction engine (pairing rule, stubbing, LLM summary, fallback)
-  tokens.py            # Token estimation utility delegate
-rag/                   # Retrieval-Augmented Generation subsystem
-  chunker.py           # AST & Tree-sitter chunker + module summarizer
-  indexer.py           # Persistent ChromaDB vector store & SHA-256 incremental hashing
-  retrieval.py         # Vector similarity search & difflib AST symbol typo correction
-tools/                 # Builtin Tool Registry & risk-level authorization system
-  registry.py          # Tool schema generator, audit logger, output capping (100 lines), router
-  filesystem.py        # list_directory (SAFE), write_file (DANGEROUS), edit_file (DANGEROUS with unified diffs)
-  read_file.py         # read_file (SAFE)
-  shell.py             # run_shell_command (DANGEROUS, with Nova CLI safe prefixes)
-  git_tools.py         # git_status, git_diff, git_log, git_blame (SAFE), git_commit, git_push (DANGEROUS)
-  container_tools.py   # container_ps, container_logs (SAFE, Podman-native)
-  dev_tools.py         # run_tests (SENSITIVE), search_logs (SAFE)
-  code_search.py       # search_codebase (SAFE)
-repl.py                # Interactive RAG REPL with agentic loop and slash commands
-tests/                 # Automated unit test suite (80 unit tests)
+providers/                 # Multi-provider LLM abstraction layer
+  base.py                  # BaseLLMProvider (ABC), ChatMessage, LLMResponse, StreamChunk, ToolCall
+  anthropic_provider.py    # Anthropic Claude API (tool calling & streaming)
+  gemini_provider.py       # Google Gemini API via google-genai SDK
+  groq_provider.py         # Groq LPU API (ultra-fast inference)
+  huggingface_provider.py  # HuggingFace Serverless Inference API
+  mistral_provider.py      # Mistral AI API (Mistral Small/Large, Codestral)
+  ollama_provider.py       # Local Ollama integration (custom num_ctx & GPU offloading)
+  openai_provider.py       # OpenAI Cloud API (GPT-4o, o-series)
+llm_client.py              # OrbitLLM unified facade with 503 exponential backoff retries
+config.py                  # OrbitConfig dataclass, context window maps & ~/.orbit/config.yaml
+configure.py               # Interactive CLI configuration wizard (survey-based)
+agent_loop.py              # ReAct multi-step agentic tool-chaining loop with streaming
+agent_sub.py               # Isolated sub-agent execution engine & delegate_task tool
+context/                   # Context Window & Compaction Subsystem
+  window.py                # Context window resolver (40+ models, user config, 4096 fallback)
+  measure.py               # Token estimator (reported usage or chars/4) & 75% trigger
+ui.py                      # Rich terminal UI, markdown rendering, and diff colorization
+commands/                  # Slash command subsystem
+  session.py               # Session dataclass (agent, config, history, REPL state)
+  registry.py              # Command registry, @command decorator, exception-safe dispatch
+  builtin.py               # Handlers for 14 slash commands (/help, /status, /model, etc.)
+  compaction.py            # Context compaction engine (pairing, stubbing, LLM summarization)
+  tokens.py                # Token estimation utility delegate
+rag/                       # Hybrid Retrieval-Augmented Generation subsystem
+  chunker.py               # AST (Python) & Tree-Sitter (Go, JS/TS, Rust, Java, C/C++) chunker
+  bm25.py                  # Sparse BM25 keyword index & Reciprocal Rank Fusion (RRF)
+  indexer.py               # Persistent ChromaDB vector store with SHA-256 incremental hashing
+  retrieval.py             # Hybrid dense+sparse retrieval, nomic embeddings, AST typo correction
+tools/                     # Builtin Tool Registry & risk-level authorization system
+  registry.py              # Tool schema generator, audit logger, output capping, execution router
+  diff_utils.py            # Unified diff generator & atomic validate-and-replace algorithm
+  filesystem.py            # list_directory (SAFE), write_file (DANGEROUS), edit_file (DANGEROUS)
+  read_file.py             # read_file (SAFE)
+  shell.py                 # run_shell_command (DANGEROUS, with Nova CLI safe prefixes)
+  git_tools.py             # git_status, git_diff, git_log, git_blame (SAFE), git_commit, git_push (DANGEROUS)
+  container_tools.py       # container_ps, container_logs (SAFE, Podman-native)
+  dev_tools.py             # run_tests (SENSITIVE), search_logs (SAFE)
+  code_search.py           # search_codebase (SAFE)
+repl.py                    # Interactive RAG REPL with agentic loop and slash commands
+orbit_repl.py              # Legacy backwards-compatibility entrypoint stub
+orbit-core.py              # Minimal programmatic streaming and multi-turn chat demo
+tests/                     # Automated unit & evaluation test suite (119 tests)
 ```
 
-## Architecture
+---
 
-### 1. Provider Abstraction & Config (`providers/`, `llm_client.py`, `config.py`)
+## Core Capabilities
 
-Every LLM backend (Ollama, OpenAI, HuggingFace, Gemini, Groq) implements a unified `BaseLLMProvider` interface.
-
-Configuration is persisted to `~/.orbit/config.yaml` via `config.py` and can be set interactively using `python configure.py`.
+### 1. Multi-Provider LLM Abstraction (`providers/`, `llm_client.py`)
+Orbit normalizes 7 LLM backends behind `BaseLLMProvider` and the `OrbitLLM` facade:
+- **Local & Cloud**: Ollama, OpenAI, Anthropic, Google Gemini, Mistral, Groq, Hugging Face.
+- **Unified Function Calling**: Standardized `ToolCall` and schema translation across all providers.
+- **Resilience**: Built-in exponential backoff retry handler for transient HTTP 503 / capacity errors.
+- **Token Streaming**: Real-time token streaming to stdout for low latency interaction.
 
 ```python
 from config import load_config
@@ -67,94 +73,146 @@ from llm_client import OrbitLLM
 
 cfg = load_config()
 llm = OrbitLLM.from_config(cfg)
-response = llm.chat(messages="Hello, Orbit")
-print(response.content)
+response = llm.chat("Explain the GalactOS process scheduler", stream=True)
+for chunk in response:
+    print(chunk.delta, end="", flush=True)
 ```
 
-### 2. Context Management & Compaction (`context/`, `commands/compaction.py`)
+### 2. Hybrid RAG Pipeline (`rag/`)
+Orbit features a hybrid retrieval engine combining dense semantics with exact-symbol keyword search:
+- **Language-Aware AST Chunking (`rag/chunker.py`)**:
+  - Python parsed via standard library `ast` into functions, classes, and methods with docstrings.
+  - Go, JavaScript, TypeScript, Rust, Java, C, and C++ parsed via `tree-sitter`.
+  - Markdown/prose split on semantic headings and paragraphs.
+  - Deterministic module-level summary generation for top-level repo indexing.
+- **Persistent ChromaDB & Incremental Hashing (`rag/indexer.py`)**:
+  - Local persistent vector storage in `./.orbit/chroma_data`.
+  - SHA-256 content hashing (`content_hash`) skips unchanged files to eliminate redundant re-embedding.
+- **Hybrid Search via Reciprocal Rank Fusion (`rag/bm25.py`, `rag/retrieval.py`)**:
+  - Dense vector retrieval using Ollama `nomic-embed-text` with task-specific prefixes (`search_document: `, `search_query: `) and batched embedding support.
+  - Sparse BM25 keyword matching for exact symbol and identifier precision.
+  - Results merged via Reciprocal Rank Fusion (RRF) with relevance floor (`min_score=0.35`) and per-file deduplication (`max_per_file=2`).
+- **Cached AST Symbol Typo Correction**:
+  - Extracts and caches known code symbols in `./.orbit/symbols.json` during indexing.
+  - If vector retrieval score is low ($< 0.45$), applies `difflib` fuzzy matching against cached AST symbols without expensive collection-wide scans.
+- **Evaluation Suite (`tests/eval_retrieval.py`)**:
+  - 30 curated golden query-symbol pairs testing Recall@k and Mean Reciprocal Rank (MRR).
 
-Orbit features automated context window management:
-- **Window Resolver** (`context/window.py`): Resolves maximum tokens per model (user config $\rightarrow$ model table $\rightarrow$ 4096 fallback).
-- **Measurement & Trigger** (`context/measure.py`): Uses provider-reported token usage or character length estimation; triggers compaction when token usage reaches $\ge 75\%$ or remaining tokens $< 1000$.
-- **Compaction Engine** (`commands/compaction.py`):
-  1. *Never-touch rule*: System prompt and 1st user query are preserved.
-  2. *Recent window*: Keeps most recent 6 messages untouched.
-  3. *Atomic Tool Pairing*: Tool call assistant messages and tool result messages are paired atomically (never orphaned).
-  4. *Outcome Stubbing*: Replaces old tool outputs with short outcome summaries (`read_file`, `edit_file`, `run_tests`, `run_shell_command`).
-  5. *LLM Summarization & Fallback*: Summarizes middle history; falls back to oldest tool pair dropping if summary fails or remains over limit.
+### 3. ReAct Multi-Step Agentic Loop (`agent_loop.py`)
+- **Iterative Tool Chaining**: Sends message history and tool schemas to the model; executes requested tools via the permission-gated registry and loops back.
+- **Configurable Step Ceiling**: Defaults to 8 steps (adjustable from 1 to 20 via `/steps <n>`) with loop-prevention and graceful degradation (provides summary when step limit is hit).
+- **Proactive Context Compaction**: Automatically triggers context compaction during the turn if estimated token usage reaches $\ge 75\%$ or reserve drops below 1,000 tokens.
 
-### 3. Sub-Agents (`agent_sub.py`)
+### 4. Context Management & Intelligent Compaction (`context/`, `commands/compaction.py`)
+- **Window Resolver (`context/window.py`)**: Lookups for 40+ models across OpenAI, Anthropic, Gemini, LLaMA 3, Mistral, DeepSeek, and Qwen, with user config overrides and safe 4096 fallback.
+- **Token Estimator (`context/measure.py`)**: Accurate tracking using provider-reported usage or character ratio estimation.
+- **Compaction Engine (`commands/compaction.py`)**:
+  1. *Never-touch rule*: Preserves system prompt and the initial user request.
+  2. *Recent window*: Preserves the most recent 6 messages intact.
+  3. *Atomic Tool Pairing*: Keeps tool calls and results strictly paired.
+  4. *Outcome Stubbing*: Condenses historical tool outputs (`read_file`, `edit_file`, `run_tests`, `run_shell_command`) into concise result stubs.
+  5. *LLM Summarization & Fallback*: Condenses middle messages using the active LLM, falling back to dropping the oldest tool pairs if needed.
 
-Tasks can be delegated to isolated sub-agents via the `delegate_task(task)` tool:
-- **Isolated History**: Runs in a fresh, isolated message history.
-- **Tool Restriction**: Restricted to `SAFE` risk tier tools by default.
-- **Depth Limit 1**: Sub-agents cannot spawn nested sub-agents.
-- **Audit Logging**: Logs unique `agent_id` in `.orbit/audit.log`.
+### 5. Risk-Tiered Tool Registry & Surgical Editing (`tools/`)
+Tools enforce clear security boundaries and audit tracking:
+- **Risk Tiers**:
+  - `SAFE`: Automatically executes without prompting (`list_directory`, `read_file`, `git_status`, `git_diff`, `git_log`, `git_blame`, `container_ps`, `container_logs`, `search_logs`, `search_codebase`).
+  - `SENSITIVE`: Prompts user before execution (`run_tests`).
+  - `DANGEROUS`: Requires explicit confirmation with full preview (`write_file`, `edit_file`, `run_shell_command`, `git_commit`, `git_push`).
+- **Surgical File Editing (`tools/diff_utils.py`, `tools/filesystem.py`)**:
+  - `edit_file(path, old_text, new_text)` executes exact replacements with whitespace-forgiving fallback and displays an interactive terminal unified diff preview before confirmation.
+- **Audit Logging**: All tool executions and permission approvals are appended to `./.orbit/audit.log`.
+- **Output Capping**: Tool outputs are capped at 100 lines to prevent context blowing.
 
-### 4. Multi-Step Agentic Loop & Real-Time Streaming (`agent_loop.py`)
+### 6. Sub-Agent Delegation (`agent_sub.py`)
+- Tasks can be partitioned to isolated sub-agents via `delegate_task(task)`.
+- Runs with an isolated message history, restricts access to `SAFE` tools only, enforces a recursion depth ceiling of 1, and tags audit log events with unique sub-agent IDs.
 
-Orbit runs a multi-step tool-chaining cycle (`run_agent_turn`):
-1. Sends conversation history + tool schemas to the active LLM.
-2. If the model emits tool calls, executes them via `tools.execute_tool` (enforcing risk tier permissions and 100-line output caps), appends results, and loops back.
-3. If the model outputs plain text, renders final answer tokens directly to standard output.
-4. Enforces a `max_steps` ceiling (default 8) to prevent infinite loops.
-
-### 5. GalactOS & Nova Companion Tool Integration
-
-Orbit is built for **GalactOS** and integrates with **Nova** CLI utilities:
+### 7. GalactOS & Nova Companion Integration
 - **Container Management**: Podman-native execution (`podman ps`, `nova container ps`).
-- **Command Safety Allowlist**: Recognizes `nova version`, `nova system`, `nova project doctor`, and `nova container ps` as safe read-only operations.
+- **Safe Command Allowlist**: Recognizes read-only commands and GalactOS Nova commands (`nova version`, `nova system`, `nova project doctor`, `nova container ps`) as safe.
 
 ---
 
 ## REPL Slash Commands
 
-Any line starting with `/` (or standard bare-word aliases) is intercepted by the command dispatcher:
+Any command prefixed with `/` (or supported bare-word aliases) is intercepted by the command dispatcher:
 
-| Command | Description |
-|---|---|
-| `/help` (or `?`) | List all registered REPL slash commands and aliases |
-| `/status` | Display provider, model, context window size (with source), token usage, max steps, and chunk count |
-| `/model [name]` | Show or switch current model at runtime (verifies provider availability) |
-| `/provider [name]` | Show or switch current provider at runtime |
-| `/config` | Display active configuration with API keys masked (`****cdef`) |
-| `/tools` | List registered tools and their risk tiers |
-| `/audit [n]` | View last `n` entries from `.orbit/audit.log` (default 10) |
-| `/steps [n]` | Show or set `max_steps` tool execution limit (1 to 20) |
-| `/reindex [path]` | Re-index workspace target path into vector store |
-| `/sources [on\|off]` | Toggle printing retrieved RAG context sources for each query |
-| `/context` | Show message history count, token usage, window size, and source |
-| `/compact [focus]` | Trigger intelligent context history compaction |
-| `/clear` (alias `/reset`) | Clear conversation history |
-| `/exit` (alias `/quit`) | Exit the Orbit REPL |
+| Command | Aliases | Description |
+|---|---|---|
+| `/help` | `/?` | List all registered REPL slash commands and aliases |
+| `/status` | | Display active provider, model, context window size, token usage, max steps, and chunk count |
+| `/model [name]` | | Show or switch the active LLM model at runtime (verifies provider availability) |
+| `/provider [name]` | | Show or switch the active LLM provider at runtime |
+| `/config` | | Display active configuration with API keys masked (`****cdef`) |
+| `/tools` | | List all registered tools and their associated risk tiers |
+| `/audit [n]` | | View the last `n` entries from `./.orbit/audit.log` (default 10) |
+| `/steps [n]` | | Show or set the `max_steps` tool chaining limit (1 to 20) |
+| `/reindex [path]` | | Re-index workspace path into the ChromaDB vector store |
+| `/sources [on\|off]` | | Toggle displaying retrieved RAG context sources for each query |
+| `/context` | | Show history message count, estimated token usage, and context window source |
+| `/compact [focus]` | | Trigger manual context compaction with optional focus prompt |
+| `/clear` | `/reset` | Clear current conversation history |
+| `/exit` | `/quit` | Exit the Orbit REPL |
 
 ---
 
-## Usage
+## Quickstart & Usage
 
+### 1. Interactive Configuration Wizard
+Run the interactive setup wizard to configure your default provider, model, context window, and tool permissions:
 ```bash
-# Interactively configure provider, model, context size, and tool defaults
 python configure.py
-
-# Index current directory and start Orbit REPL
-python repl.py ./
-
-# Specify provider and model via CLI override
-python repl.py ./ --provider gemini --model gemini-2.0-flash
 ```
 
-### Running Unit Tests
+### 2. Launching the Orbit REPL
+Index the current project directory and enter the interactive REPL:
+```bash
+python repl.py ./
+```
+
+You can override the provider or model on launch:
+```bash
+python repl.py ./ --provider anthropic --model claude-3-5-sonnet-20241022
+python repl.py ./ --provider gemini --model gemini-2.5-flash
+python repl.py ./ --provider ollama --model llama3.2:latest
+```
+
+### 3. Programmatic Demo
+Run the programmatic streaming and multi-turn chat demonstration script:
+```bash
+python orbit-core.py
+```
+
+---
+
+## Running Automated Tests
+
+Orbit includes an automated test suite of **119 unit and integration tests** covering all providers, RAG pipelines, chunkers, tools, context compaction, and sub-agents:
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## Configuration & Security
+To run retrieval evaluation benchmarks:
+```bash
+python -m unittest tests/eval_retrieval.py
+```
 
-Set provider API keys in environment variables or `~/.orbit/config.yaml`:
-- `GEMINI_API_KEY`
-- `OPENAI_API_KEY`
-- `GROQ_API_KEY`
-- `HF_TOKEN`
+---
 
-**Security note:** `.env` and credential files are excluded from indexing. Sensitive and dangerous operations enforce explicit confirmation prompts and append log entries to `.orbit/audit.log`.
+## Configuration & Environment Variables
+
+Orbit stores configuration in `~/.orbit/config.yaml`. Provider API keys can be defined in `~/.orbit/config.yaml` or exported in your environment / `.env`:
+
+| Provider | Key | Environment Variable | Default Model |
+|---|---|---|---|
+| Ollama | `ollama` | *(None required - local)* | `llama3.2:latest` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet-20241022` |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| Mistral AI | `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` |
+| Groq | `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
+| HuggingFace | `huggingface` | `HF_TOKEN` (or `HUGGINGFACE_API_KEY`) | `Qwen/Qwen2.5-Coder-7B-Instruct` |
+
+> **Security Note:** Sensitive files (`.env`, credentials, `.git`) are automatically excluded from indexing. All destructive or sensitive operations require interactive confirmation and are recorded in `./.orbit/audit.log`.
