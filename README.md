@@ -4,7 +4,7 @@ Orbit is the AI assistant layer for **GalactOS** — a provider-agnostic LLM run
 
 Orbit works natively with GalactOS and its companion tool **Nova** (`nova container`, `nova project doctor`, `nova cluster`, `nova system`), featuring Podman-native container execution and shell safety allowlisting.
 
-Built from scratch without bloated orchestration frameworks — every component (AST & Tree-Sitter chunking, BM25 + dense vector hybrid retrieval, ChromaDB persistent indexing, symbol typo correction, multi-provider tool calling, context compaction, and sub-agents) is implemented directly for complete transparency, speed, and maintainability. See [docs/ARCHITECTURE.md](file:///d:/web%20development%20projects/ongoing/orbit/docs/ARCHITECTURE.md) for detailed architectural specifications.
+Built from scratch without bloated orchestration frameworks — every component (AST & Tree-Sitter chunking, BM25 + dense vector hybrid retrieval, ChromaDB persistent indexing, symbol typo correction, multi-provider tool calling, context compaction, and sub-agents) is implemented directly for complete transparency, speed, and maintainability. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architectural specifications.
 
 ---
 
@@ -88,9 +88,13 @@ Orbit features a hybrid retrieval engine combining dense semantics with exact-sy
 - **Persistent ChromaDB & Incremental Hashing (`rag/indexer.py`)**:
   - Local persistent vector storage in `./.orbit/chroma_data`.
   - SHA-256 content hashing (`content_hash`) skips unchanged files to eliminate redundant re-embedding.
+- **Multi-Provider Embeddings & Degraded Fallback (`rag/retrieval.py`)**:
+  - Supports embedding models across **Ollama** (`nomic-embed-text`), **OpenAI** (`text-embedding-3-small`), **Google Gemini** (`gemini-embedding-2`), **Mistral AI** (`mistral-embed`), and **Hugging Face** (`sentence-transformers/all-MiniLM-L6-v2`). Note: Google shut down `text-embedding-004` on January 14, 2026; Orbit defaults to `gemini-embedding-2`.
+  - **Vector Dimension Mismatch Auto-Rebuild (`rag/indexer.py`)**: Stores `embedding_model_tag` (`<provider>:<model>`) in collection metadata. If a user switches embedding models (e.g. 768-dim `nomic-embed-text` to 3072-dim `gemini-embedding-2`), Orbit automatically detects the change, resets the collection, and rebuilds the vector index to prevent dimension mismatch exceptions.
+  - **Anthropic Embedding Guidance**: Anthropic does not provide an embedding model API. Users whose primary LLM is Anthropic Claude configure a secondary provider (OpenAI, Gemini, Mistral, HuggingFace) or local Ollama for embeddings.
+  - **Degraded BM25 Keyword-Only Fallback**: If no embedding provider is available (no cloud keys and Ollama is not installed/running, such as on a fresh OS ISO), Orbit does not crash. Instead, it enters a degraded **keyword-only BM25 mode** with an informative warning, ensuring full text search, AST symbol lookup, and agent operations remain fully functional offline.
 - **Hybrid Search via Reciprocal Rank Fusion (`rag/bm25.py`, `rag/retrieval.py`)**:
-  - Dense vector retrieval using Ollama `nomic-embed-text` with task-specific prefixes (`search_document: `, `search_query: `) and batched embedding support.
-  - Sparse BM25 keyword matching for exact symbol and identifier precision.
+  - Dense vector retrieval combined with sparse BM25 keyword matching for exact symbol and identifier precision.
   - Results merged via Reciprocal Rank Fusion (RRF) with relevance floor (`min_score=0.35`) and per-file deduplication (`max_per_file=2`).
 - **Cached AST Symbol Typo Correction**:
   - Extracts and caches known code symbols in `./.orbit/symbols.json` during indexing.
@@ -160,7 +164,7 @@ Any command prefixed with `/` (or supported bare-word aliases) is intercepted by
 ## Quickstart & Usage
 
 ### 1. Interactive Configuration Wizard
-Run the interactive setup wizard to configure your default provider, model, context window, and tool permissions:
+Run the interactive setup wizard to configure your default LLM provider, chat model, embedding provider, context window, and tool permissions:
 ```bash
 python configure.py
 ```
@@ -171,10 +175,11 @@ Index the current project directory and enter the interactive REPL:
 python repl.py ./
 ```
 
-You can override the provider or model on launch:
+You can override LLM or embedding parameters on launch:
 ```bash
-python repl.py ./ --provider anthropic --model claude-3-5-sonnet-20241022
+python repl.py ./ --provider anthropic --model claude-sonnet-5-5
 python repl.py ./ --provider gemini --model gemini-2.5-flash
+python repl.py ./ --embedding-provider openai --embedding-model text-embedding-3-small
 python repl.py ./ --provider ollama --model llama3.2:latest
 ```
 
@@ -188,7 +193,7 @@ python orbit-core.py
 
 ## Running Automated Tests
 
-Orbit includes an automated test suite of **119 unit and integration tests** covering all providers, RAG pipelines, chunkers, tools, context compaction, and sub-agents:
+Orbit includes an automated test suite of **127 unit and integration tests** covering all providers, embedding fallbacks, RAG pipelines, chunkers, tools, context compaction, and sub-agents:
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
@@ -209,7 +214,7 @@ Orbit stores configuration in `~/.orbit/config.yaml`. Provider API keys can be d
 |---|---|---|---|
 | Ollama | `ollama` | *(None required - local)* | `llama3.2:latest` |
 | OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet-20241022` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` |
 | Google Gemini | `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
 | Mistral AI | `mistral` | `MISTRAL_API_KEY` | `mistral-small-latest` |
 | Groq | `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |

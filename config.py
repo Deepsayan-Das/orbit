@@ -21,6 +21,7 @@ class OrbitConfig:
     generation: dict = field(default_factory=lambda: {"temperature": 0.7, "max_tokens": 2048})
     tools: dict = field(default_factory=lambda: {"enabled": [], "risk_overrides": {}})
     context_windows: dict = field(default_factory=dict)
+    embedding: dict = field(default_factory=lambda: {"provider": "ollama", "model": "nomic-embed-text"})
 
 
 def load_config() -> OrbitConfig:
@@ -40,7 +41,18 @@ def load_config() -> OrbitConfig:
         if "providers" in data and isinstance(data["providers"], dict):
             data["providers"] = {k.lower(): v for k, v in data["providers"].items()}
 
-        return OrbitConfig(**data)
+        # Normalise embedding configuration
+        if "embedding" in data and isinstance(data["embedding"], dict):
+            if "provider" in data["embedding"] and isinstance(data["embedding"]["provider"], str):
+                data["embedding"]["provider"] = data["embedding"]["provider"].lower()
+        else:
+            data["embedding"] = {"provider": "ollama", "model": "nomic-embed-text"}
+
+        # Filter only recognized OrbitConfig fields
+        valid_fields = {f.name for f in OrbitConfig.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+
+        return OrbitConfig(**filtered_data)
     except Exception as e:
         print(f"Error loading config: {e}")
         return OrbitConfig()

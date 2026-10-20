@@ -29,8 +29,17 @@ _DEFAULT_MODELS = {
     "huggingface": "Qwen/Qwen2.5-Coder-7B-Instruct",
     "gemini":      "gemini-2.5-flash",
     "groq":        "llama-3.3-70b-versatile",
-    "anthropic":   "claude-3-5-sonnet-20241022",
+    "anthropic":   "claude-sonnet-5-5",
     "mistral":     "mistral-small-latest",
+}
+
+# Suggested default embedding models per provider
+_DEFAULT_EMBEDDING_MODELS = {
+    "ollama":      "nomic-embed-text",
+    "openai":      "text-embedding-3-small",
+    "gemini":      "gemini-embedding-2",
+    "mistral":     "mistral-embed",
+    "huggingface": "sentence-transformers/all-MiniLM-L6-v2",
 }
 
 # Environment-variable name each provider typically reads
@@ -61,6 +70,26 @@ def _input_model(provider: str, current: str) -> str:
     default = current or _DEFAULT_MODELS.get(provider, "")
     value = survey.routines.input(
         f"Model name [{default}]: ",
+    )
+    return value.strip() or default
+
+
+def _pick_embedding_provider(providers: list[str], current: str) -> str:
+    """Let the user choose an embedding provider from the options."""
+    default_idx = providers.index(current) if current in providers else 0
+    idx = survey.routines.select(
+        "Select Embedding provider: ",
+        options=providers,
+        index=default_idx,
+    )
+    return providers[idx]
+
+
+def _input_embedding_model(provider: str, current: str) -> str:
+    """Prompt for the embedding model name with a sensible default pre-filled."""
+    default = current or _DEFAULT_EMBEDDING_MODELS.get(provider, "nomic-embed-text")
+    value = survey.routines.input(
+        f"Embedding model name [{default}]: ",
     )
     return value.strip() or default
 
@@ -179,6 +208,30 @@ def run_configure_wizard() -> OrbitConfig:
         new_win = _input_ollama_context_size(cfg.model, current_win=curr_win)
         cfg.context_windows[cfg.model] = new_win
 
+    # 3c — Embedding Provider & Model
+    print()
+    if cfg.provider == "anthropic":
+        print("  [note: Anthropic does not provide an embedding API. Select Ollama or a secondary cloud provider for embeddings below.]")
+    emb_providers = list(_DEFAULT_EMBEDDING_MODELS.keys())
+    current_emb = cfg.embedding if isinstance(getattr(cfg, "embedding", None), dict) else {}
+    current_emb_prov = current_emb.get("provider", "ollama")
+    current_emb_model = current_emb.get("model", _DEFAULT_EMBEDDING_MODELS.get(current_emb_prov, "nomic-embed-text"))
+
+    emb_provider = _pick_embedding_provider(emb_providers, current_emb_prov)
+    emb_model = _input_embedding_model(emb_provider, current_emb_model if emb_provider == current_emb_prov else "")
+    cfg.embedding = {
+        "provider": emb_provider,
+        "model": emb_model,
+    }
+
+    # Prompt for embedding provider API key if needed and not already set
+    if emb_provider not in _NO_KEY_PROVIDERS:
+        existing_key = cfg.providers.get(emb_provider, {}).get("api_key")
+        if not existing_key:
+            emb_key = _input_api_key(emb_provider)
+            if emb_key:
+                cfg.providers.setdefault(emb_provider, {})["api_key"] = emb_key
+
     # 4 — Generation parameters
     print()
     cfg.generation["temperature"] = _input_temperature(cfg.generation.get("temperature", 0.7))
@@ -200,6 +253,7 @@ def main() -> None:
         print(f"\n✔ Configuration saved to {save_config.__module__}.CONFIG_PATH")
         print(f"  Provider : {cfg.provider}")
         print(f"  Model    : {cfg.model}")
+        print(f"  Embedding: {cfg.embedding.get('provider')} ({cfg.embedding.get('model')})")
         print(f"  Temp     : {cfg.generation['temperature']}")
         print(f"  MaxTok   : {cfg.generation['max_tokens']}")
         print(f"  Tools    : {', '.join(cfg.tools['enabled']) or '(none)'}")

@@ -79,16 +79,44 @@ def get_orbit_collection(
     collection_name: Optional[str] = None,
     repo_path: str = "./",
 ) -> chromadb.Collection:
-    """Retrieve or create the Orbit ChromaDB vector collection using cosine distance."""
+    """Retrieve or create the Orbit ChromaDB vector collection using cosine distance.
+    Automatically detects embedding model changes in metadata and resets collection to prevent dimension mismatch."""
     if client is None:
         client = get_chroma_client()
     if collection_name is None:
         collection_name = get_repo_collection_name(repo_path)
+
+    try:
+        from .retrieval import get_embedding_provider_and_model
+        emb_prov, emb_model = get_embedding_provider_and_model()
+    except Exception:
+        emb_prov, emb_model = "ollama", "nomic-embed-text"
+
+    target_model_tag = f"{emb_prov}:{emb_model}"
+
+    # Check if collection exists and whether its embedding model changed
+    if hasattr(client, "get_collection"):
+        try:
+            existing_col = client.get_collection(name=collection_name)
+            meta = existing_col.metadata or {}
+            existing_model_tag = meta.get("embedding_model_tag")
+            if existing_model_tag and existing_model_tag != target_model_tag:
+                print(
+                    f"[orbit] Embedding model changed ('{existing_model_tag}' -> '{target_model_tag}'). "
+                    f"Rebuilding vector index to prevent dimension mismatch..."
+                )
+                client.delete_collection(name=collection_name)
+        except Exception:
+            pass
+
     return client.get_or_create_collection(
         name=collection_name,
         metadata={
             "hnsw:space": "cosine",
             "description": "Orbit AST-aware code & document embeddings (v2)",
+            "embedding_model_tag": target_model_tag,
+            "embedding_provider": emb_prov,
+            "embedding_model": emb_model,
         }
     )
 
@@ -264,12 +292,31 @@ def index_file(
         })
 
     if ids:
-        collection.upsert(
-            ids=ids,
-            documents=documents,
-            embeddings=embeddings,
-            metadatas=metadatas
-        )
+        try:
+            collection.upsert(
+                ids=ids,
+                documents=documents,
+                embeddings=embeddings,
+                metadatas=metadatas
+            )
+        except Exception as e:
+            if "dimension" in str(e).lower():
+                print(f"[orbit] Dimension mismatch detected during index ({e}). Rebuilding collection...")
+                client = get_chroma_client()
+                col_name = getattr(collection, "name", get_repo_collection_name(norm_path))
+                try:
+                    client.delete_collection(name=col_name)
+                except Exception:
+                    pass
+                new_col = get_orbit_collection(client=client, collection_name=col_name, repo_path=norm_path)
+                new_col.upsert(
+                    ids=ids,
+                    documents=documents,
+                    embeddings=embeddings,
+                    metadatas=metadatas
+                )
+            else:
+                raise
 
     return records
 

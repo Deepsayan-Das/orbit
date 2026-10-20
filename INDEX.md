@@ -11,7 +11,7 @@ This document serves as the high-level architectural index of the Orbit codebase
 - **Unified Multi-Provider LLM Facade (`OrbitLLM`)**: A standardized client interface supporting 7 backends: **Ollama** (local), **OpenAI**, **Anthropic Claude**, **Google Gemini**, **Mistral AI**, **Groq LPU**, and **HuggingFace** Serverless Inference.
 - **Resilient API Calls**: Built-in exponential backoff retry handler for transient HTTP 503 / capacity overload errors.
 - **Token-by-Token Streaming**: Real-time token streaming to stdout for low-latency terminal interaction.
-- **Hybrid RAG Pipeline (`rag/`)**: Combines dense semantic vector retrieval (`nomic-embed-text`) with sparse **BM25 keyword search** via **Reciprocal Rank Fusion (RRF)** for exact symbol precision, relevance floor gating (`min_score=0.35`), and candidate deduplication.
+- **Hybrid RAG Pipeline (`rag/`)**: Combines multi-provider vector embeddings (**Ollama**, **OpenAI**, **Gemini**, **Mistral**, **HuggingFace**) with sparse **BM25 keyword search** via **Reciprocal Rank Fusion (RRF)** for exact symbol precision, relevance floor gating (`min_score=0.35`), candidate deduplication, and automated fallback to Ollama `nomic-embed-text` with missing-service exit diagnostics.
 - **Multi-Language AST & Tree-Sitter Chunking**: Language-aware codebase parsing using Python `ast` alongside Tree-Sitter grammars for Go, JavaScript, TypeScript, Rust, Java, C, and C++, plus semantic prose chunking.
 - **Persistent ChromaDB & Incremental Indexing**: Local persistent vector index (`./.orbit/chroma_data`) with SHA-256 content hashing to eliminate redundant re-embedding.
 - **Cached AST Symbol Typo Correction**: Disk-cached symbols (`./.orbit/symbols.json`) for fast `difflib` fuzzy query correction without scanning the whole collection.
@@ -88,7 +88,7 @@ orbit/
 ├── docs/                      # Technical Documentation
 │   └── ARCHITECTURE.md        # Deep architectural design specification
 │
-└── tests/                     # Automated Test Suite (119 automated tests)
+└── tests/                     # Automated Test Suite (127 automated tests)
     ├── eval_retrieval.py      # Golden retrieval benchmark (30 queries, Recall@k & MRR)
     ├── test_agent_loop.py     # ReAct loop, step limit & ceiling degradation tests
     ├── test_anthropic.py      # Anthropic provider unit tests
@@ -97,6 +97,7 @@ orbit/
     ├── test_commands.py       # REPL slash command tests
     ├── test_compaction.py     # Context compaction tests
     ├── test_edit_file.py      # Surgical file edit & diff validation tests
+    ├── test_embedding_providers.py # Multi-provider embedding resolution & Ollama fallback tests
     ├── test_measure.py        # Token measurement & compaction trigger tests
     ├── test_rag.py            # Vector store, hashing & retrieval tests
     ├── test_subagent.py       # Sub-agent isolation & delegation tests
@@ -130,9 +131,13 @@ orbit/
   - Manages persistent ChromaDB collections in `./.orbit/chroma_data`.
   - Calculates SHA-256 hashes (`content_hash`) to avoid re-embedding unchanged files.
   - Caches extracted AST symbols in `./.orbit/symbols.json` during indexing.
+- **Multi-Provider Embeddings & Degraded Fallback (`rag/retrieval.py`)**:
+  - Generates embeddings using configured provider: Ollama (`nomic-embed-text`), OpenAI (`text-embedding-3-small`), Google Gemini (`gemini-embedding-2`), Mistral AI (`mistral-embed`), or Hugging Face. (Note: Google retired `text-embedding-004` on Jan 14, 2026; Orbit defaults to `gemini-embedding-2`).
+  - **Vector Dimension Protection (`rag/indexer.py`)**: Stores `embedding_model_tag` in collection metadata; automatically detects model changes and rebuilds the collection to prevent dimension mismatch exceptions.
+  - **Anthropic Embedding Guidance**: Anthropic does not offer an embedding API. Claude users configure a second provider or run local Ollama.
+  - **Degraded BM25 Mode**: If no embedding provider is available (no cloud keys, Ollama unavailable), Orbit switches to keyword-only BM25 mode with an informative warning so offline search remains fully functional.
 - **Hybrid Retrieval & RRF Fusion (`rag/bm25.py`, `rag/retrieval.py`)**:
-  - Dense embeddings generated via Ollama `nomic-embed-text` with task prefixes (`search_document: `, `search_query: `) and batched execution.
-  - Sparse BM25 keyword matching runs in tandem to capture exact function/variable identifiers.
+  - Dense vector similarity combined with sparse BM25 keyword matching for exact symbol and identifier precision.
   - Combines results via Reciprocal Rank Fusion (RRF), filtering with a relevance floor (`min_score=0.35`) and per-file candidate caps (`max_per_file=2`).
   - Fallback fuzzy typo correction matches misspelled query terms against cached AST symbols if vector retrieval score is low ($< 0.45$).
 - **Benchmark Evaluation (`tests/eval_retrieval.py`)**:
@@ -188,8 +193,9 @@ python repl.py ./
 
 Launch with runtime overrides:
 ```bash
-python repl.py ./ --provider anthropic --model claude-3-5-sonnet-20241022
+python repl.py ./ --provider anthropic --model claude-sonnet-5-5
 python repl.py ./ --provider gemini --model gemini-2.5-flash
+python repl.py ./ --embedding-provider openai --embedding-model text-embedding-3-small
 ```
 
 ### 3. Programmatic Demo
@@ -199,7 +205,7 @@ python orbit-core.py
 ```
 
 ### 4. Running Tests
-Run the complete automated test suite (119 tests):
+Run the complete automated test suite (127 tests):
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```

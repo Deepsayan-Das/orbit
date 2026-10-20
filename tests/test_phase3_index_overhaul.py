@@ -181,6 +181,27 @@ export default class MainApp {
             rag.indexer.embed = orig_embed
             rag.retrieval.embed = orig_embed
 
+    def test_collection_rebuilds_on_embedding_model_tag_change(self):
+        """Verify collection is automatically deleted and rebuilt when embedding model tag changes."""
+        repo_dir = os.path.join(self.test_dir, "repo_switch")
+        os.makedirs(repo_dir, exist_ok=True)
+
+        with patch.dict(os.environ, {"ORBIT_EMBEDDING_PROVIDER": "ollama", "ORBIT_EMBEDDING_MODEL": "nomic-embed-text"}):
+            col1 = get_orbit_collection(self.client, repo_path=repo_dir)
+            col1.add(ids=["doc1"], documents=["first"], embeddings=[[0.1] * 768])
+            self.assertEqual(col1.count(), 1)
+            self.assertEqual(col1.metadata.get("embedding_model_tag"), "ollama:nomic-embed-text")
+
+        # Now simulate switching to Gemini gemini-embedding-2 (3072 dims)
+        with patch.dict(os.environ, {"ORBIT_EMBEDDING_PROVIDER": "gemini", "ORBIT_EMBEDDING_MODEL": "gemini-embedding-2"}):
+            col2 = get_orbit_collection(self.client, repo_path=repo_dir)
+            self.assertEqual(col2.metadata.get("embedding_model_tag"), "gemini:gemini-embedding-2")
+            # Collection was rebuilt clean with zero docs
+            self.assertEqual(col2.count(), 0)
+            # Able to insert 3072 dims without dimension mismatch error
+            col2.add(ids=["doc2"], documents=["second"], embeddings=[[0.2] * 3072])
+            self.assertEqual(col2.count(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

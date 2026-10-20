@@ -27,13 +27,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Orbit Interactive RAG REPL")
     parser.add_argument("target", nargs="?", default="./", help="Directory or file path to index (default: ./)")
-    parser.add_argument("--provider", default=os.getenv("ORBIT_PROVIDER", cfg.provider), help="LLM Provider: ollama, huggingface, openai, gemini, groq")
+    parser.add_argument("--provider", default=os.getenv("ORBIT_PROVIDER", cfg.provider), help="LLM Provider: ollama, huggingface, openai, gemini, groq, anthropic, mistral")
     parser.add_argument("--model", default=os.getenv("ORBIT_MODEL", cfg.model), help="Model name")
+    parser.add_argument("--embedding-provider", default=os.getenv("ORBIT_EMBEDDING_PROVIDER", cfg.embedding.get("provider", "ollama") if isinstance(cfg.embedding, dict) else "ollama"), help="Embedding Provider: ollama, openai, gemini, mistral, huggingface")
+    parser.add_argument("--embedding-model", default=os.getenv("ORBIT_EMBEDDING_MODEL", cfg.embedding.get("model", "nomic-embed-text") if isinstance(cfg.embedding, dict) else "nomic-embed-text"), help="Embedding Model name")
 
     args = parser.parse_args()
 
     cfg.provider = args.provider.lower()
     cfg.model = args.model
+    cfg.embedding = {
+        "provider": args.embedding_provider.lower(),
+        "model": args.embedding_model,
+    }
     target = args.target
 
     collection = get_orbit_collection()

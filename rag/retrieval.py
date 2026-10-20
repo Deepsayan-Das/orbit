@@ -9,6 +9,7 @@ import difflib
 import json
 import os
 import re
+import sys
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
@@ -17,6 +18,8 @@ import ollama
 from .bm25 import BM25, filter_and_deduplicate, reciprocal_rank_fusion
 
 EMBED_MODEL = "nomic-embed-text"
+FALLBACK_MODEL = "nomic-embed-text"
+FALLBACK_PROVIDER = "ollama"
 
 COMMON_ENGLISH_WORDS = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
@@ -121,14 +124,296 @@ def _get_or_build_collection_bm25(collection: Any) -> Optional[BM25]:
         return None
 
 
-def embed(text: str, prefix: Optional[str] = None) -> List[float]:
-    """Generate vector embedding for text using Ollama nomic-embed-text with optional task prefix."""
-    full_text = f"{prefix}{text}" if prefix else text
+def get_embedding_provider_and_model() -> tuple[str, str]:
+    """Retrieve active embedding provider and model from environment or ~/.orbit/config.yaml."""
+    env_prov = os.getenv("ORBIT_EMBEDDING_PROVIDER")
+    env_model = os.getenv("ORBIT_EMBEDDING_MODEL")
+    if env_prov and env_model:
+        return env_prov.lower(), env_model
+
     try:
-        response = ollama.embeddings(model=EMBED_MODEL, prompt=full_text)
-        return response["embedding"]
-    except Exception as e:
-        raise RuntimeError(f"Ollama embedding service unavailable: {e}") from e
+        from config import load_config
+        cfg = load_config()
+        emb = getattr(cfg, "embedding", None)
+        if isinstance(emb, dict):
+            prov = env_prov or emb.get("provider", "ollama")
+            model = env_model or emb.get("model", "nomic-embed-text")
+            return prov.lower(), model
+    except Exception:
+        pass
+
+    return env_prov.lower() if env_prov else "ollama", env_model or EMBED_MODEL
+
+
+def get_provider_api_key(provider: str) -> Optional[str]:
+    """Retrieve API key for embedding provider from environment or ~/.orbit/config.yaml."""
+    env_map = {
+        "openai": "OPENAI_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "mistral": "MISTRAL_API_KEY",
+        "huggingface": "HF_TOKEN",
+        "groq": "GROQ_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+    }
+    env_var = env_map.get(provider.lower())
+    if env_var and os.getenv(env_var):
+        return os.getenv(env_var)
+    if provider.lower() == "huggingface" and os.getenv("HUGGINGFACE_API_KEY"):
+        return os.getenv("HUGGINGFACE_API_KEY")
+
+    try:
+        from config import load_config
+        cfg = load_config()
+        if hasattr(cfg, "providers") and isinstance(cfg.providers, dict):
+            p_data = cfg.providers.get(provider.lower(), {})
+            if isinstance(p_data, dict) and p_data.get("api_key"):
+                return p_data.get("api_key")
+    except Exception:
+        pass
+    return None
+
+
+_DEGRADED_BM25_MODE: bool = False
+_WARNED_DEGRADED_MODE: bool = False
+
+
+def is_degraded_bm25_mode() -> bool:
+    """Return True if Orbit is currently operating in degraded keyword-only BM25 mode."""
+    return _DEGRADED_BM25_MODE
+
+
+def activate_degraded_bm25_mode(details: Optional[str] = None) -> None:
+    """Activate degraded BM25 mode and print a helpful one-time warning."""
+    global _DEGRADED_BM25_MODE, _WARNED_DEGRADED_MODE
+    _DEGRADED_BM25_MODE = True
+    if not _WARNED_DEGRADED_MODE:
+        _WARNED_DEGRADED_MODE = True
+        warn_degraded_mode(details)
+
+
+def warn_degraded_mode(details: Optional[str] = None) -> None:
+    """Print an informative warning when falling back to degraded keyword-only BM25 mode."""
+    lines = [
+        "",
+        "================================================================================",
+        "[Orbit Warning: Degraded Keyword-Only Search Mode]",
+        "Could not generate vector embeddings, and fallback Ollama service is unavailable.",
+    ]
+    if details:
+        lines.append(f"Details: {details}")
+    lines.extend([
+        "",
+        "Orbit is entering DEGRADED MODE (BM25 keyword search only).",
+        "Semantic vector similarity is disabled, but exact AST symbol and keyword retrieval",
+        "remain fully operational across your codebase without external dependencies.",
+        "",
+        "To enable full semantic vector embeddings:",
+        "  * If your only API key is Anthropic: Anthropic does not provide an embedding API.",
+        "    Configure a second provider (OpenAI, Gemini, Mistral, HuggingFace) or Ollama.",
+        "  * Install Ollama from https://ollama.com and run: 'ollama pull nomic-embed-text'",
+        "  * Or run 'python configure.py' to select another cloud embedding provider.",
+        "================================================================================",
+        "",
+    ])
+    msg = "\n".join(lines)
+    try:
+        from ui import print_warning
+        print_warning(msg)
+    except Exception:
+        sys.stderr.write(msg + "\n")
+
+
+def report_ollama_missing_and_exit(details: Optional[str] = None) -> None:
+    """Report that Ollama is not installed or service is unavailable, then exit."""
+    lines = [
+        "",
+        "================================================================================",
+        "[Orbit Embedding Error]",
+        "Could not generate vector embeddings, and fallback Ollama service is unavailable.",
+    ]
+    if details:
+        lines.append(f"Details: {details}")
+    lines.extend([
+        "",
+        "Ollama is either not installed or the local Ollama service is not running.",
+        "To resolve this issue:",
+        "  * If your only API key is Anthropic: Anthropic does not provide an embedding model API.",
+        "    You will need a second provider for embeddings (OpenAI, Gemini, Mistral, HuggingFace)",
+        "    or a local Ollama instance.",
+        "  1. Install Ollama from https://ollama.com and ensure the service is running.",
+        "  2. Pull the default fallback embedding model: 'ollama pull nomic-embed-text'",
+        "  - OR -",
+        "  3. Configure a cloud embedding provider (OpenAI, Gemini, Mistral, HuggingFace):",
+        "     Run 'python configure.py' and select your preferred embedding provider and model.",
+        "================================================================================",
+        "",
+    ])
+    msg = "\n".join(lines)
+    try:
+        from ui import print_error
+        print_error(msg)
+    except Exception:
+        sys.stderr.write(msg + "\n")
+    sys.exit(1)
+
+
+def _embed_ollama(texts: List[str], model: str, prefix: Optional[str] = None) -> List[List[float]]:
+    try:
+        import ollama
+    except ImportError as e:
+        raise RuntimeError("Ollama Python package is not installed.") from e
+
+    prefixed_texts = [f"{prefix}{t}" if prefix else t for t in texts]
+
+    if len(prefixed_texts) == 1:
+        resp = ollama.embeddings(model=model, prompt=prefixed_texts[0])
+        return [resp["embedding"]]
+
+    try:
+        if hasattr(ollama, "embed"):
+            resp = ollama.embed(model=model, input=prefixed_texts)
+            if isinstance(resp, dict) and "embeddings" in resp:
+                return resp["embeddings"]
+            elif hasattr(resp, "embeddings"):
+                return resp.embeddings
+    except Exception:
+        pass
+
+    return [ollama.embeddings(model=model, prompt=t)["embedding"] for t in prefixed_texts]
+
+
+def _embed_openai(texts: List[str], model: str) -> List[List[float]]:
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise RuntimeError("openai package is not installed. Install via `pip install openai`.") from e
+
+    api_key = get_provider_api_key("openai")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is required for OpenAI embeddings. Configure it in .env or config.yaml.")
+
+    client = OpenAI(api_key=api_key)
+    resp = client.embeddings.create(input=texts, model=model)
+    return [item.embedding for item in resp.data]
+
+
+def _embed_gemini(texts: List[str], model: str) -> List[List[float]]:
+    try:
+        from google import genai
+    except ImportError as e:
+        raise RuntimeError("google-genai package is not installed. Install via `pip install google-genai`.") from e
+
+    api_key = get_provider_api_key("gemini")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is required for Gemini embeddings. Configure it in .env or config.yaml.")
+
+    client = genai.Client(api_key=api_key)
+    results = []
+    for t in texts:
+        resp = client.models.embed_content(model=model, contents=t)
+        if hasattr(resp, "embedding") and hasattr(resp.embedding, "values"):
+            results.append(list(resp.embedding.values))
+        elif hasattr(resp, "embeddings") and resp.embeddings:
+            results.append(list(resp.embeddings[0].values))
+        else:
+            raise RuntimeError(f"Unexpected response structure from Gemini embed_content: {resp}")
+    return results
+
+
+def _embed_mistral(texts: List[str], model: str) -> List[List[float]]:
+    try:
+        from mistralai.client import Mistral
+    except ImportError as e:
+        raise RuntimeError("mistralai package is not installed. Install via `pip install mistralai`.") from e
+
+    api_key = get_provider_api_key("mistral")
+    if not api_key:
+        raise ValueError("MISTRAL_API_KEY is required for Mistral embeddings. Configure it in .env or config.yaml.")
+
+    client = Mistral(api_key=api_key)
+    resp = client.embeddings.create(model=model, inputs=texts)
+    return [item.embedding for item in resp.data]
+
+
+def _embed_huggingface(texts: List[str], model: str) -> List[List[float]]:
+    try:
+        from huggingface_hub import InferenceClient
+    except ImportError as e:
+        raise RuntimeError("huggingface_hub package is not installed. Install via `pip install huggingface_hub`.") from e
+
+    token = get_provider_api_key("huggingface")
+    client = InferenceClient(token=token)
+    results = []
+    for t in texts:
+        emb = client.feature_extraction(t, model=model)
+        if hasattr(emb, "tolist"):
+            emb = emb.tolist()
+        results.append(list(emb))
+    return results
+
+
+def _dispatch_embed(texts: List[str], prefix: Optional[str] = None) -> List[List[float]]:
+    """
+    Generate embeddings using configured provider and model.
+    Falls back to Ollama nomic-embed-text if primary provider fails.
+    If Ollama is also not installed or not running, reports and exits.
+    """
+    if not texts:
+        return []
+
+    provider, model = get_embedding_provider_and_model()
+
+    # 1. Try primary provider
+    try:
+        if provider == "ollama":
+            return _embed_ollama(texts, model=model, prefix=prefix)
+        elif provider == "openai":
+            return _embed_openai(texts, model=model)
+        elif provider == "gemini":
+            return _embed_gemini(texts, model=model)
+        elif provider == "mistral":
+            return _embed_mistral(texts, model=model)
+        elif provider == "huggingface":
+            return _embed_huggingface(texts, model=model)
+        else:
+            raise ValueError(f"Unsupported embedding provider: '{provider}'")
+    except Exception as primary_err:
+        # If the primary provider was Ollama itself, Ollama is already the failure point
+        if provider == "ollama":
+            if os.getenv("ORBIT_STRICT_EMBEDDINGS") == "1":
+                report_ollama_missing_and_exit(str(primary_err))
+            activate_degraded_bm25_mode(str(primary_err))
+            return [[0.0]] * len(texts)
+
+        # Primary failed, attempt fallback to Ollama nomic-embed-text
+        try:
+            from ui import print_warning
+            print_warning(
+                f"Embedding failed with provider '{provider}' ({primary_err}). "
+                f"Falling back to Ollama ({FALLBACK_MODEL})..."
+            )
+        except Exception:
+            print(
+                f"[orbit warning] Embedding failed with provider '{provider}' ({primary_err}). "
+                f"Falling back to Ollama ({FALLBACK_MODEL})..."
+            )
+
+        try:
+            return _embed_ollama(texts, model=FALLBACK_MODEL, prefix=prefix)
+        except Exception as fallback_err:
+            if os.getenv("ORBIT_STRICT_EMBEDDINGS") == "1":
+                report_ollama_missing_and_exit(
+                    f"Primary error ({provider}): {primary_err}; Fallback error (ollama): {fallback_err}"
+                )
+            activate_degraded_bm25_mode(
+                f"Primary error ({provider}): {primary_err}; Fallback error (ollama): {fallback_err}"
+            )
+            return [[0.0]] * len(texts)
+
+
+def embed(text: str, prefix: Optional[str] = None) -> List[float]:
+    """Generate vector embedding for text using configured provider with optional task prefix."""
+    return _dispatch_embed([text], prefix=prefix)[0]
 
 
 def embed_document(text: str) -> List[float]:
@@ -142,21 +427,8 @@ def embed_query(text: str) -> List[float]:
 
 
 def embed_batch(texts: List[str], prefix: Optional[str] = None) -> List[List[float]]:
-    """Batch embed multiple text strings in a single call using ollama.embed where available."""
-    if not texts:
-        return []
-    prefixed_texts = [f"{prefix}{t}" if prefix else t for t in texts]
-    try:
-        if hasattr(ollama, "embed"):
-            resp = ollama.embed(model=EMBED_MODEL, input=prefixed_texts)
-            if isinstance(resp, dict) and "embeddings" in resp:
-                return resp["embeddings"]
-            elif hasattr(resp, "embeddings"):
-                return resp.embeddings
-    except Exception:
-        pass
-    # Fallback to sequential embedding
-    return [embed(t) for t in prefixed_texts]
+    """Batch embed multiple text strings using configured provider."""
+    return _dispatch_embed(texts, prefix=prefix)
 
 
 def embed_documents(texts: List[str]) -> List[List[float]]:
@@ -242,6 +514,18 @@ def retrieve(
     candidate_k = max(top_k * 3, 10)
     try:
         if collection is not None:
+            if is_degraded_bm25_mode():
+                bm25_idx = _get_or_build_collection_bm25(collection)
+                if bm25_idx:
+                    bm25_results = bm25_idx.search(query, top_k=candidate_k)
+                    bm25_chunks = []
+                    for item, sc in bm25_results:
+                        c = dict(item)
+                        c["score"] = sc
+                        bm25_chunks.append(c)
+                    return filter_and_deduplicate(bm25_chunks, min_score=0.0, max_per_file=max_per_file, top_k=top_k)
+                return []
+
             retrieved_vector: List[Dict[str, Any]] = []
             try:
                 try:
@@ -300,9 +584,19 @@ def retrieve(
             else:
                 candidates = retrieved_vector
 
-            return filter_and_deduplicate(candidates, min_score=min_score, max_per_file=max_per_file, top_k=top_k)
+            active_min_score = min_score if retrieved_vector else 0.0
+            return filter_and_deduplicate(candidates, min_score=active_min_score, max_per_file=max_per_file, top_k=top_k)
 
         elif records is not None:
+            if is_degraded_bm25_mode():
+                bm25 = BM25().fit(records)
+                bm25_res = bm25.search(query, top_k=candidate_k)
+                candidates = []
+                for item, sc in bm25_res:
+                    c = dict(item)
+                    c["score"] = sc
+                    candidates.append(c)
+                return filter_and_deduplicate(candidates, min_score=0.0, max_per_file=max_per_file, top_k=top_k)
             scored: List[Dict[str, Any]] = []
             try:
                 try:

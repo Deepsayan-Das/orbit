@@ -26,7 +26,7 @@ class TestAnthropicProvider(unittest.TestCase):
 
     def test_sync_chat_mocked(self):
         """Test AnthropicProvider.chat with mocked Anthropic client."""
-        provider = AnthropicProvider(model="claude-3-5-sonnet-20241022", api_key="test_key")
+        provider = AnthropicProvider(model="claude-sonnet-5-5", api_key="test_key")
 
         # Mock the client and Anthropic messages.create call
         mock_client = MagicMock()
@@ -46,12 +46,12 @@ class TestAnthropicProvider(unittest.TestCase):
 
         self.assertIsInstance(response, LLMResponse)
         self.assertEqual(response.content, "Hello from Claude!")
-        self.assertEqual(response.model, "claude-3-5-sonnet-20241022")
+        self.assertEqual(response.model, "claude-sonnet-5-5")
         mock_client.messages.create.assert_called_once()
 
         # Check call arguments
         call_kwargs = mock_client.messages.create.call_args[1]
-        self.assertEqual(call_kwargs["model"], "claude-3-5-sonnet-20241022")
+        self.assertEqual(call_kwargs["model"], "claude-sonnet-5-5")
         self.assertEqual(call_kwargs["messages"], [{"role": "user", "content": "Hello"}])
 
 
