@@ -7,6 +7,25 @@ from .base import BaseLLMProvider, ChatMessage, LLMResponse, StreamChunk, ToolCa
 class OllamaProvider(BaseLLMProvider):
     """Ollama Local Model Provider supporting multi-turn chat and token streaming."""
 
+    GENERIC_OPTION_MAP: Dict[str, str] = {
+        "max_tokens": "num_predict",
+        "max_completion_tokens": "num_predict",
+    }
+
+    OLLAMA_OPTIONS: set = {
+        "numa", "num_ctx", "num_batch", "num_gpu", "main_gpu", "low_vram",
+        "f16_kv", "logits_all", "vocab_only", "use_mmap", "use_mlock",
+        "embedding_only", "num_thread", "num_keep", "seed", "num_predict",
+        "top_k", "top_p", "tfs_z", "typical_p", "repeat_last_n",
+        "temperature", "repeat_penalty", "presence_penalty",
+        "frequency_penalty", "mirostat", "mirostat_tau", "mirostat_eta",
+        "penalize_newline", "stop",
+    }
+
+    VALID_CHAT_KWARGS: set = {
+        "tools", "format", "keep_alive", "think", "logprobs", "top_logprobs"
+    }
+
     def __init__(
         self,
         model: str = "qwen:0.5b",
@@ -20,18 +39,36 @@ class OllamaProvider(BaseLLMProvider):
         if host:
             self.client = ollama.Client(host=host)
         else:
-            self.client = ollama
+            self.client = ollama.Client()
 
     def _prepare_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         kw = dict(kwargs)
-        options = dict(kw.get("options", {}) or {})
+        options = dict(kw.pop("options", None) or {})
+
+        prepared: Dict[str, Any] = {}
+
+        for key, val in kw.items():
+            if key in ("model", "messages", "stream"):
+                continue
+
+            if key in self.GENERIC_OPTION_MAP:
+                target_key = self.GENERIC_OPTION_MAP[key]
+                if target_key not in options:
+                    options[target_key] = val
+            elif key in self.OLLAMA_OPTIONS:
+                if key not in options:
+                    options[key] = val
+            elif key in self.VALID_CHAT_KWARGS:
+                prepared[key] = val
+            else:
+                print(f"[warning] Unrecognized parameter '{key}' for Ollama provider; ignoring.")
+
         if self.num_ctx is not None and "num_ctx" not in options:
             options["num_ctx"] = self.num_ctx
-        if "temperature" in kw and "temperature" not in options:
-            options["temperature"] = kw.pop("temperature")
+
         if options:
-            kw["options"] = options
-        return kw
+            prepared["options"] = options
+        return prepared
 
     def chat(
         self,
