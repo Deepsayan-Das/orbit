@@ -1,0 +1,11 @@
+Package: orbit
+Version: 0.1.0-1
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: python3 (>= 3.13), python3 (<< 3.14), git, ca-certificates
+Suggests: podman
+Maintainer: Deepsayan Das <deepsayandas274@gmail.com>
+Description: Orbit, the AI coding assistant for GalactOS
+ Provider-agnostic LLM runtime with hybrid RAG, a multi-step agent loop
+ and a risk-tiered tool registry. Bring your own API key or use Ollama.

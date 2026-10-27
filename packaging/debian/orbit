@@ -1,0 +1,14 @@
+#!/bin/sh
+# Start the Orbit AI assistant in a project folder (default: current folder)
+case "$1" in
+  ""|-*) set -- . "$@" ;;
+esac
+target=$(realpath "$1" 2>/dev/null || echo "$1")
+if [ "$target" = "$HOME" ] || [ "$target" = "/" ]; then
+  echo "orbit: refusing to index $target. Run it inside a project folder, or pass one: orbit ./myproject" >&2
+  exit 1
+fi
+[ -d "$target" ] || { echo "orbit: $1 is not a folder" >&2; exit 1; }
+shift
+cd "$target" || exit 1
+exec /opt/orbit/venv/bin/python /opt/orbit/repl.py . "$@"

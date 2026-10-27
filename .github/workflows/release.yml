@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Orbit .deb inside debian:trixie container
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -e GITHUB_REF_NAME="${GITHUB_REF_NAME}" \
+            debian:trixie bash -euxo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+
+              # 1. apt install python3 python3-venv ca-certificates; copy the repo to /opt/orbit without .git
+              apt-get update
+              apt-get install -y --no-install-recommends python3 python3-venv ca-certificates
+              mkdir -p /opt/orbit
+              cp -a /workspace/. /opt/orbit/
+              rm -rf /opt/orbit/.git
+
+              # 2. python3 -m venv /opt/orbit/venv; /opt/orbit/venv/bin/pip install -r /opt/orbit/requirements.txt
+              python3 -m venv /opt/orbit/venv
+              /opt/orbit/venv/bin/pip install --no-cache-dir -r /opt/orbit/requirements.txt
+
+              # 3. run the unit tests with /opt/orbit/venv/bin on PATH (the tool runs `python`); the job must fail if any test fails
+              export PATH="/opt/orbit/venv/bin:$PATH"
+              cd /opt/orbit
+              python -m unittest discover -s tests -p "test_*.py"
+
+              # 4. delete /opt/orbit/tests, any .orbit folders and __pycache__ (outside the venv); then `python -m compileall -q` on /opt/orbit excluding the venv
+              rm -rf /opt/orbit/tests
+              find /opt/orbit -path /opt/orbit/venv -prune -o -name ".orbit" -exec rm -rf {} +
+              find /opt/orbit -path /opt/orbit/venv -prune -o -name "__pycache__" -exec rm -rf {} +
+              find /opt/orbit -path /opt/orbit/venv -prune -o -name ".env" -exec rm -rf {} +
+              find /opt/orbit -path /opt/orbit/venv -prune -o -name "config.yaml" -exec rm -rf {} +
+              python -m compileall -q -x "/opt/orbit/venv" /opt/orbit
+
+              # 5. stage a tree with DEBIAN/control from packaging/debian/control (set Version from the tag, with -1 appended as the revision), opt/orbit copied with `cp -a` (keep symlinks), and usr/bin/orbit and usr/bin/orbit-configure from packaging/debian/ (mode 0755)
+              TAG="${GITHUB_REF_NAME#v}"
+              if [[ "$TAG" == *-* ]]; then
+                VERSION="$TAG"
+              else
+                VERSION="${TAG}-1"
+              fi
+
+              STAGE_DIR=/tmp/stage
+              mkdir -p "$STAGE_DIR/DEBIAN"
+              mkdir -p "$STAGE_DIR/opt"
+              mkdir -p "$STAGE_DIR/usr/bin"
+
+              sed "s/^Version:.*/Version: ${VERSION}/" /workspace/packaging/debian/control > "$STAGE_DIR/DEBIAN/control"
+
+              cp -a /opt/orbit "$STAGE_DIR/opt/"
+              cp /workspace/packaging/debian/orbit "$STAGE_DIR/usr/bin/orbit"
+              cp /workspace/packaging/debian/orbit-configure "$STAGE_DIR/usr/bin/orbit-configure"
+              chmod 0755 "$STAGE_DIR/usr/bin/orbit" "$STAGE_DIR/usr/bin/orbit-configure"
+
+              # 6. dpkg-deb -Zxz --root-owner-group --build
+              ARCH=$(grep "^Architecture:" "$STAGE_DIR/DEBIAN/control" | awk "{print \$2}")
+              DEB_FILE="orbit_${VERSION}_${ARCH}.deb"
+              dpkg-deb -Zxz --root-owner-group --build "$STAGE_DIR" "/workspace/$DEB_FILE"
+
+              # 7. fail if the package contains .env, config.yaml or any .orbit folder
+              echo "Listing package contents for $DEB_FILE:"
+              CONTENTS=$(dpkg-deb -c "/workspace/$DEB_FILE")
+              echo "$CONTENTS"
+
+              if echo "$CONTENTS" | grep -E "(\.env|config\.yaml|\.orbit(/|$))"; then
+                echo "ERROR: Package contains forbidden file or directory (.env, config.yaml, or .orbit)!" >&2
+                exit 1
+              fi
+            '
+
+      - name: Compute SHA256SUMS
+        run: |
+          sha256sum *.deb > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.deb
+            SHA256SUMS
+          token: ${{ github.token }}
