@@ -1,5 +1,7 @@
 # Orbit
 
+[![CI](https://github.com/Deepsayan-Das/orbit/actions/workflows/ci.yml/badge.svg)](https://github.com/Deepsayan-Das/orbit/actions/workflows/ci.yml)
+
 Orbit is the AI assistant layer for **GalactOS** — a provider-agnostic LLM runtime coupled with a high-performance Hybrid RAG (retrieval-augmented generation) pipeline, multi-step ReAct agentic loop, automated context compaction engine, isolated sub-agent delegation, and a risk-tiered tool registry.
 
 Orbit works natively with GalactOS and its companion tool **Nova** (`nova container`, `nova project doctor`, `nova cluster`, `nova system`), featuring Podman-native container execution and shell safety allowlisting.
