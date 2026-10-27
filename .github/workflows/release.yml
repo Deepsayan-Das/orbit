@@ -24,9 +24,9 @@ jobs:
             debian:trixie bash -euxo pipefail -c '
               export DEBIAN_FRONTEND=noninteractive
 
-              # 1. apt install python3 python3-venv ca-certificates; copy the repo to /opt/orbit without .git
+              # 1. apt install python3 python3-venv ca-certificates git; copy the repo to /opt/orbit without .git
               apt-get update
-              apt-get install -y python3 python3-venv ca-certificates
+              apt-get install -y python3 python3-venv ca-certificates git
               mkdir -p /opt/orbit
               cp -a /workspace/. /opt/orbit/
               rm -rf /opt/orbit/.git
