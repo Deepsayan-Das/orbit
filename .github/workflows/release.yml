@@ -26,14 +26,14 @@ jobs:
 
               # 1. apt install python3 python3-venv ca-certificates; copy the repo to /opt/orbit without .git
               apt-get update
-              apt-get install -y --no-install-recommends python3 python3-venv ca-certificates
+              apt-get install -y python3 python3-venv ca-certificates
               mkdir -p /opt/orbit
               cp -a /workspace/. /opt/orbit/
               rm -rf /opt/orbit/.git
 
               # 2. python3 -m venv /opt/orbit/venv; /opt/orbit/venv/bin/pip install -r /opt/orbit/requirements.txt
               python3 -m venv /opt/orbit/venv
-              /opt/orbit/venv/bin/pip install --no-cache-dir -r /opt/orbit/requirements.txt
+              /opt/orbit/venv/bin/pip install -r /opt/orbit/requirements.txt
 
               # 3. run the unit tests with /opt/orbit/venv/bin on PATH (the tool runs `python`); the job must fail if any test fails
               export PATH="/opt/orbit/venv/bin:$PATH"
@@ -50,11 +50,7 @@ jobs:
 
               # 5. stage a tree with DEBIAN/control from packaging/debian/control (set Version from the tag, with -1 appended as the revision), opt/orbit copied with `cp -a` (keep symlinks), and usr/bin/orbit and usr/bin/orbit-configure from packaging/debian/ (mode 0755)
               TAG="${GITHUB_REF_NAME#v}"
-              if [[ "$TAG" == *-* ]]; then
-                VERSION="$TAG"
-              else
-                VERSION="${TAG}-1"
-              fi
+              VERSION="${TAG%-1}-1"
 
               STAGE_DIR=/tmp/stage
               mkdir -p "$STAGE_DIR/DEBIAN"
@@ -69,12 +65,12 @@ jobs:
               chmod 0755 "$STAGE_DIR/usr/bin/orbit" "$STAGE_DIR/usr/bin/orbit-configure"
 
               # 6. dpkg-deb -Zxz --root-owner-group --build
-              ARCH=$(grep "^Architecture:" "$STAGE_DIR/DEBIAN/control" | awk "{print \$2}")
+              ARCH=$(grep "^Architecture:" "$STAGE_DIR/DEBIAN/control" | cut -d" " -f2)
               DEB_FILE="orbit_${VERSION}_${ARCH}.deb"
               dpkg-deb -Zxz --root-owner-group --build "$STAGE_DIR" "/workspace/$DEB_FILE"
 
               # 7. fail if the package contains .env, config.yaml or any .orbit folder
-              echo "Listing package contents for $DEB_FILE:"
+              echo "=== Listing package contents for $DEB_FILE ==="
               CONTENTS=$(dpkg-deb -c "/workspace/$DEB_FILE")
               echo "$CONTENTS"
 
